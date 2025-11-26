@@ -266,10 +266,14 @@ class DHCPv6Client:
 
     def _recv_packets(self):
         """DHCPv6 패킷 수신 스레드"""
-        filter_str = f"udp and dst port {DHCPV6_CLIENT_PORT}"
-
         def packet_handler(pkt):
             if not self.running:
+                return
+
+            # Python 레벨 필터링 (libpcap BPF 컴파일 우회)
+            if not pkt.haslayer(UDP):
+                return
+            if pkt[UDP].dport != DHCPV6_CLIENT_PORT:
                 return
 
             try:
@@ -277,10 +281,10 @@ class DHCPv6Client:
             except Exception as e:
                 self.logger.error(f"Error handling packet: {e}")
 
-        self.logger.debug(f"Starting packet capture with filter: {filter_str}")
+        self.logger.debug(f"Starting packet capture (DHCPv6 client port {DHCPV6_CLIENT_PORT})")
         sniff(
             iface=self.interface,
-            filter=filter_str,
+            filter=None,  # BPF 필터 제거 (Python 레벨에서 필터링)
             prn=packet_handler,
             store=False,
             stop_filter=lambda x: not self.running
