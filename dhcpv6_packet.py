@@ -345,7 +345,7 @@ class DHCPv6Packet:
 
         # Server DUID 추출
         if pkt.haslayer(DHCP6OptServerId):
-            result['server_duid'] = pkt[DHCP6OptServerId].duid
+            result['server_duid'] = bytes(pkt[DHCP6OptServerId].duid)
 
         # IA_NA 주소 추출
         if pkt.haslayer(DHCP6OptIA_NA):
