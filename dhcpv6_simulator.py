@@ -23,7 +23,7 @@ logger = logging.getLogger("DHCPv6Simulator")
 class DHCPv6Simulator:
     """다중 DHCPv6 클라이언트 시뮬레이터"""
 
-    def __init__(self, interface, num_clients=1, request_prefix=False):
+    def __init__(self, interface, num_clients=1, request_prefix=False, relay_server=None, relay_address=None):
         """
         시뮬레이터 초기화
 
@@ -31,10 +31,14 @@ class DHCPv6Simulator:
             interface: 네트워크 인터페이스 이름
             num_clients: 시뮬레이션할 클라이언트 수
             request_prefix: Prefix Delegation 요청 여부
+            relay_server: Relay 모드 사용 시 DHCPv6 서버 주소
+            relay_address: Relay Agent 주소
         """
         self.interface = interface
         self.num_clients = num_clients
         self.request_prefix = request_prefix
+        self.relay_server = relay_server
+        self.relay_address = relay_address
         self.clients = []
         self.running = False
 
@@ -43,6 +47,10 @@ class DHCPv6Simulator:
         logger.info(f"Starting DHCPv6 Simulator with {self.num_clients} client(s)")
         logger.info(f"Interface: {self.interface}")
         logger.info(f"Prefix Delegation: {'Enabled' if self.request_prefix else 'Disabled'}")
+        if self.relay_server:
+            logger.info(f"Relay Mode: Enabled (Server: {self.relay_server})")
+        else:
+            logger.info(f"Relay Mode: Disabled (Multicast)")
 
         self.running = True
 
@@ -55,7 +63,9 @@ class DHCPv6Simulator:
             client = DHCPv6Client(
                 interface=self.interface,
                 client_id=f"client-{i+1}",
-                request_prefix=self.request_prefix
+                request_prefix=self.request_prefix,
+                relay_server=self.relay_server,
+                relay_address=self.relay_address
             )
             self.clients.append(client)
 
@@ -222,6 +232,18 @@ async def main():
         help='실시간 대시보드 비활성화 (로그 모드 사용)'
     )
 
+    parser.add_argument(
+        '--relay-server',
+        type=str,
+        help='Relay 모드: DHCPv6 서버 IPv6 주소 (예: fe80::1, 2001:db8::1)'
+    )
+
+    parser.add_argument(
+        '--relay-address',
+        type=str,
+        help='Relay 모드: Relay Agent IPv6 주소 (기본값: ::)'
+    )
+
     args = parser.parse_args()
 
     # 로그 레벨 설정
@@ -240,7 +262,9 @@ async def main():
     simulator = DHCPv6Simulator(
         interface=args.interface,
         num_clients=args.clients,
-        request_prefix=args.prefix_delegation
+        request_prefix=args.prefix_delegation,
+        relay_server=args.relay_server,
+        relay_address=args.relay_address
     )
 
     # 시그널 핸들러 설정
@@ -275,7 +299,9 @@ async def main():
                 clients=simulator.clients,
                 interface=args.interface,
                 duration=args.duration,
-                request_prefix=args.prefix_delegation
+                request_prefix=args.prefix_delegation,
+                relay_server=args.relay_server,
+                relay_address=args.relay_address
             )
 
             dashboard_runner = DashboardRunner(dashboard, update_interval=0.5)

@@ -17,6 +17,8 @@ DHCPV6_REBIND = 6
 DHCPV6_REPLY = 7
 DHCPV6_RELEASE = 8
 DHCPV6_DECLINE = 9
+DHCPV6_RELAY_FORW = 12
+DHCPV6_RELAY_REPL = 13
 
 # DHCPv6 Option Types
 OPTION_CLIENTID = 1
@@ -26,6 +28,7 @@ OPTION_IA_TA = 4
 OPTION_IAADDR = 5
 OPTION_ORO = 6
 OPTION_ELAPSED_TIME = 8
+OPTION_RELAY_MSG = 9
 OPTION_IA_PD = 25
 OPTION_IAPREFIX = 26
 
@@ -370,3 +373,62 @@ class DHCPv6Packet:
                         })
 
         return result
+
+    def build_relay_forward(self, client_message, server_address, relay_address=None, peer_address=None):
+        """
+        RELAY-FORW 메시지 생성 (클라이언트 메시지를 Relay Agent가 서버로 전달)
+
+        Args:
+            client_message: 원본 클라이언트 DHCPv6 메시지 (SOLICIT, REQUEST 등)
+            server_address: DHCPv6 서버 IPv6 주소 (유니캐스트)
+            relay_address: Relay Agent의 link-local 주소 (기본값: "::")
+            peer_address: 클라이언트의 link-local 주소 (기본값: "::")
+
+        Returns:
+            scapy 패킷 객체
+        """
+        # Relay-forward 메시지 생성
+        relay_msg = DHCP6_RelayForward(
+            hopcount=0,  # 직접 연결된 클라이언트
+            linkaddr=relay_address or "::",
+            peeraddr=peer_address or "::"
+        )
+
+        # 원본 클라이언트 메시지를 Relay Message Option으로 감싸기
+        # 클라이언트 메시지에서 DHCPv6 레이어만 추출
+        if client_message.haslayer(UDP):
+            dhcp6_payload = bytes(client_message[UDP].payload)
+        else:
+            dhcp6_payload = bytes(client_message)
+
+        relay_msg /= DHCP6OptRelayMsg(message=dhcp6_payload)
+
+        # IPv6 및 UDP 헤더 추가 (서버로 유니캐스트)
+        pkt = IPv6(dst=server_address)
+        pkt /= UDP(sport=DHCPV6_CLIENT_PORT, dport=DHCPV6_SERVER_PORT)
+        pkt /= relay_msg
+
+        return pkt
+
+    @staticmethod
+    def parse_relay_reply(pkt):
+        """
+        RELAY-REPL 메시지 파싱하여 원본 서버 응답 추출
+
+        Args:
+            pkt: scapy RELAY-REPL 패킷 객체
+
+        Returns:
+            scapy 패킷 객체: 원본 서버 응답 (ADVERTISE, REPLY 등)
+        """
+        if not pkt.haslayer(DHCP6_RelayReply):
+            return None
+
+        # Relay Message Option에서 원본 서버 응답 추출
+        if pkt.haslayer(DHCP6OptRelayMsg):
+            relay_msg_opt = pkt[DHCP6OptRelayMsg]
+            # message 필드에서 DHCPv6 메시지 재구성
+            dhcp6_msg = DHCP6(relay_msg_opt.message)
+            return dhcp6_msg
+
+        return None

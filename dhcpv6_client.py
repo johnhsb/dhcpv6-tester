@@ -18,15 +18,15 @@ logging.basicConfig(
 class DHCPv6Client:
     """DHCPv6 클라이언트"""
 
-    # 클라이언트 상태
+    # 클라이언트 상태 (DHCPv6 메시지 타입 기반)
     STATE_INIT = "INIT"
-    STATE_SELECTING = "SELECTING"
-    STATE_REQUESTING = "REQUESTING"
+    STATE_SOLICIT = "SOLICIT"
+    STATE_REQUEST = "REQUEST"
     STATE_BOUND = "BOUND"
-    STATE_RENEWING = "RENEWING"
-    STATE_REBINDING = "REBINDING"
+    STATE_RENEW = "RENEW"
+    STATE_REBIND = "REBIND"
 
-    def __init__(self, interface, client_id=None, request_prefix=False):
+    def __init__(self, interface, client_id=None, request_prefix=False, relay_server=None, relay_address=None):
         """
         DHCPv6 클라이언트 초기화
 
@@ -34,10 +34,14 @@ class DHCPv6Client:
             interface: 네트워크 인터페이스 이름
             client_id: 클라이언트 ID (None이면 자동 생성)
             request_prefix: Prefix Delegation 요청 여부
+            relay_server: Relay 모드 사용 시 DHCPv6 서버 주소 (None이면 일반 모드)
+            relay_address: Relay Agent 주소 (기본값: "::")
         """
         self.interface = interface
         self.request_prefix = request_prefix
         self.client_id = client_id or f"client-{uuid.uuid4().hex[:8]}"
+        self.relay_server = relay_server
+        self.relay_address = relay_address
         self.logger = logging.getLogger(f"DHCPv6Client[{self.client_id}]")
 
         # 패킷 빌더
@@ -87,8 +91,9 @@ class DHCPv6Client:
 
     def _send_solicit(self):
         """SOLICIT 메시지 전송"""
-        self.logger.info("Sending SOLICIT message")
-        self.state = self.STATE_SELECTING
+        mode = "via Relay" if self.relay_server else "multicast"
+        self.logger.info(f"Sending SOLICIT message ({mode})")
+        self.state = self.STATE_SOLICIT
 
         pkt = self.packet_builder.build_solicit(
             request_ia_na=True,
@@ -98,6 +103,19 @@ class DHCPv6Client:
         try:
             # Link-local 주소 가져오기
             self._set_src_addr(pkt)
+
+            # Relay 모드: RELAY-FORW로 감싸기
+            if self.relay_server:
+                peer_addr = pkt[IPv6].src if pkt.haslayer(IPv6) else None
+                pkt = self.packet_builder.build_relay_forward(
+                    client_message=pkt,
+                    server_address=self.relay_server,
+                    relay_address=self.relay_address,
+                    peer_address=peer_addr
+                )
+                self._set_src_addr(pkt)
+                self.logger.debug(f"SOLICIT wrapped in RELAY-FORW to {self.relay_server}")
+
             send(pkt, iface=self.interface, verbose=False)
             self.logger.debug("SOLICIT sent successfully")
         except Exception as e:
@@ -105,8 +123,9 @@ class DHCPv6Client:
 
     def _send_request(self):
         """REQUEST 메시지 전송"""
-        self.logger.info("Sending REQUEST message")
-        self.state = self.STATE_REQUESTING
+        mode = "via Relay" if self.relay_server else "multicast"
+        self.logger.info(f"Sending REQUEST message ({mode})")
+        self.state = self.STATE_REQUEST
 
         # ADVERTISE에서 받은 주소/prefix 사용
         ia_na_addr = self.assigned_addresses[0]['address'] if self.assigned_addresses else None
@@ -123,6 +142,19 @@ class DHCPv6Client:
 
         try:
             self._set_src_addr(pkt)
+
+            # Relay 모드: RELAY-FORW로 감싸기
+            if self.relay_server:
+                peer_addr = pkt[IPv6].src if pkt.haslayer(IPv6) else None
+                pkt = self.packet_builder.build_relay_forward(
+                    client_message=pkt,
+                    server_address=self.relay_server,
+                    relay_address=self.relay_address,
+                    peer_address=peer_addr
+                )
+                self._set_src_addr(pkt)
+                self.logger.debug(f"REQUEST wrapped in RELAY-FORW to {self.relay_server}")
+
             send(pkt, iface=self.interface, verbose=False)
             self.logger.debug("REQUEST sent successfully")
         except Exception as e:
@@ -130,8 +162,9 @@ class DHCPv6Client:
 
     def _send_renew(self):
         """RENEW 메시지 전송"""
-        self.logger.info("Sending RENEW message")
-        self.state = self.STATE_RENEWING
+        mode = "via Relay" if self.relay_server else "multicast"
+        self.logger.info(f"Sending RENEW message ({mode})")
+        self.state = self.STATE_RENEW
 
         ia_na_addr = self.assigned_addresses[0]['address'] if self.assigned_addresses else None
         ia_pd_prefix = None
@@ -147,6 +180,19 @@ class DHCPv6Client:
 
         try:
             self._set_src_addr(pkt)
+
+            # Relay 모드: RELAY-FORW로 감싸기
+            if self.relay_server:
+                peer_addr = pkt[IPv6].src if pkt.haslayer(IPv6) else None
+                pkt = self.packet_builder.build_relay_forward(
+                    client_message=pkt,
+                    server_address=self.relay_server,
+                    relay_address=self.relay_address,
+                    peer_address=peer_addr
+                )
+                self._set_src_addr(pkt)
+                self.logger.debug(f"RENEW wrapped in RELAY-FORW to {self.relay_server}")
+
             send(pkt, iface=self.interface, verbose=False)
             self.logger.debug("RENEW sent successfully")
         except Exception as e:
@@ -155,7 +201,7 @@ class DHCPv6Client:
     def _send_rebind(self):
         """REBIND 메시지 전송"""
         self.logger.info("Sending REBIND message")
-        self.state = self.STATE_REBINDING
+        self.state = self.STATE_REBIND
 
         ia_na_addr = self.assigned_addresses[0]['address'] if self.assigned_addresses else None
         ia_pd_prefix = None
@@ -199,14 +245,26 @@ class DHCPv6Client:
 
     def _handle_packet(self, pkt):
         """수신한 DHCPv6 패킷 처리"""
-        if pkt.haslayer(DHCP6_Advertise) and self.state == self.STATE_SELECTING:
+        # Relay 모드: RELAY-REPL에서 원본 메시지 추출
+        if self.relay_server and pkt.haslayer(DHCP6_RelayReply):
+            self.logger.debug("Received RELAY-REPL, extracting original message")
+            original_pkt = DHCPv6Packet.parse_relay_reply(pkt)
+            if original_pkt:
+                # 원본 패킷으로 교체
+                pkt = original_pkt
+            else:
+                self.logger.warning("Failed to extract message from RELAY-REPL")
+                return
+
+        # 일반 메시지 처리
+        if pkt.haslayer(DHCP6_Advertise) and self.state == self.STATE_SOLICIT:
             self._handle_advertise(pkt)
         elif pkt.haslayer(DHCP6_Reply):
-            if self.state == self.STATE_REQUESTING:
+            if self.state == self.STATE_REQUEST:
                 self._handle_reply(pkt)
-            elif self.state == self.STATE_RENEWING:
+            elif self.state == self.STATE_RENEW:
                 self._handle_renew_reply(pkt)
-            elif self.state == self.STATE_REBINDING:
+            elif self.state == self.STATE_REBIND:
                 self._handle_rebind_reply(pkt)
 
     def _handle_advertise(self, pkt):

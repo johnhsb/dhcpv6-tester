@@ -15,17 +15,17 @@ from dhcpv6_client import DHCPv6Client
 class DHCPv6Dashboard:
     """DHCPv6 시뮬레이터 실시간 대시보드"""
 
-    # 상태별 색상 및 아이콘
+    # 상태별 색상 및 아이콘 (DHCPv6 메시지 타입 기반)
     STATE_COLORS = {
         DHCPv6Client.STATE_INIT: ("yellow", "⚪"),
-        DHCPv6Client.STATE_SELECTING: ("cyan", "🔍"),
-        DHCPv6Client.STATE_REQUESTING: ("blue", "📨"),
+        DHCPv6Client.STATE_SOLICIT: ("cyan", "📤"),
+        DHCPv6Client.STATE_REQUEST: ("blue", "📨"),
         DHCPv6Client.STATE_BOUND: ("green", "✅"),
-        DHCPv6Client.STATE_RENEWING: ("magenta", "🔄"),
-        DHCPv6Client.STATE_REBINDING: ("red", "⚠️"),
+        DHCPv6Client.STATE_RENEW: ("magenta", "🔄"),
+        DHCPv6Client.STATE_REBIND: ("red", "⚠️"),
     }
 
-    def __init__(self, clients, interface, duration, request_prefix=False):
+    def __init__(self, clients, interface, duration, request_prefix=False, relay_server=None, relay_address=None):
         """
         대시보드 초기화
 
@@ -34,11 +34,15 @@ class DHCPv6Dashboard:
             interface: 네트워크 인터페이스 이름
             duration: 총 실행 시간 (초)
             request_prefix: Prefix Delegation 요청 여부
+            relay_server: Relay 모드 서버 주소
+            relay_address: Relay Agent 주소
         """
         self.clients = clients
         self.interface = interface
         self.duration = duration
         self.request_prefix = request_prefix
+        self.relay_server = relay_server
+        self.relay_address = relay_address
         self.console = Console()
         self.start_time = time.time()
 
@@ -74,6 +78,17 @@ class DHCPv6Dashboard:
 
         header_text = Text()
         header_text.append("DHCPv6 Client Simulator", style="bold cyan")
+
+        # Relay 모드 배지
+        if self.relay_server:
+            header_text.append(" [", style="dim")
+            header_text.append("Relay Mode", style="bold magenta on blue")
+            header_text.append("]", style="dim")
+        else:
+            header_text.append(" [", style="dim")
+            header_text.append("Multicast", style="bold green on blue")
+            header_text.append("]", style="dim")
+
         header_text.append(" | ", style="dim")
         header_text.append(f"Interface: {self.interface}", style="bold yellow")
         header_text.append(" | ", style="dim")
@@ -147,11 +162,11 @@ class DHCPv6Dashboard:
         total = len(self.clients)
         state_counts = {
             DHCPv6Client.STATE_INIT: 0,
-            DHCPv6Client.STATE_SELECTING: 0,
-            DHCPv6Client.STATE_REQUESTING: 0,
+            DHCPv6Client.STATE_SOLICIT: 0,
+            DHCPv6Client.STATE_REQUEST: 0,
             DHCPv6Client.STATE_BOUND: 0,
-            DHCPv6Client.STATE_RENEWING: 0,
-            DHCPv6Client.STATE_REBINDING: 0,
+            DHCPv6Client.STATE_RENEW: 0,
+            DHCPv6Client.STATE_REBIND: 0,
         }
 
         total_addresses = 0
@@ -169,6 +184,19 @@ class DHCPv6Dashboard:
         stats_table.add_column("Value", style="yellow", justify="right")
 
         stats_table.add_row("Total Clients", str(total))
+
+        # Relay 모드 정보
+        if self.relay_server:
+            stats_table.add_row("", "")  # 구분선
+            stats_table.add_row("Mode", "[magenta]Relay[/magenta]")
+            stats_table.add_row("Server", f"[yellow]{self.relay_server}[/yellow]")
+            if self.relay_address and self.relay_address != "::":
+                stats_table.add_row("Relay Addr", f"[dim]{self.relay_address}[/dim]")
+        else:
+            stats_table.add_row("", "")  # 구분선
+            stats_table.add_row("Mode", "[green]Multicast[/green]")
+            stats_table.add_row("Dest", "[dim]ff02::1:2[/dim]")
+
         stats_table.add_row("", "")  # 구분선
 
         # 각 상태별 카운트
