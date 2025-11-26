@@ -5,7 +5,8 @@ import threading
 import logging
 from scapy.all import *
 from scapy.layers.inet6 import IPv6, UDP
-from scapy.layers.dhcp6 import DHCP6_Advertise, DHCP6_Reply
+from scapy.layers.dhcp6 import DHCP6_Advertise, DHCP6_Reply, DHCP6_RelayReply
+from scapy.layers.l2 import Ether
 from dhcpv6_packet import DHCPv6Packet, DHCPV6_CLIENT_PORT, DHCPV6_SERVER_PORT
 
 # 로깅 설정
@@ -25,6 +26,13 @@ class DHCPv6Client:
     STATE_BOUND = "BOUND"
     STATE_RENEW = "RENEW"
     STATE_REBIND = "REBIND"
+
+    # RFC 8415 재전송 타이머 파라미터 (초)
+    SOL_TIMEOUT = 1      # SOLICIT 초기 재전송 타임아웃
+    SOL_MAX_RT = 3600    # SOLICIT 최대 재전송 타임아웃
+    REQ_TIMEOUT = 1      # REQUEST 초기 재전송 타임아웃
+    REQ_MAX_RT = 30      # REQUEST 최대 재전송 타임아웃
+    REQ_MAX_RC = 10      # REQUEST 최대 재시도 횟수
 
     def __init__(self, interface, client_id=None, request_prefix=False, relay_server=None, relay_address=None):
         """
@@ -59,6 +67,11 @@ class DHCPv6Client:
         self.renew_interval = None
         self.rebind_interval = None
 
+        # 재전송 타이머 관리 (RFC 8415)
+        self.retransmit_timer = None
+        self.retry_count = 0
+        self.current_rt = 0
+
         # 패킷 수신 스레드
         self.running = False
         self.recv_thread = None
@@ -85,6 +98,8 @@ class DHCPv6Client:
             self.renew_timer.cancel()
         if self.rebind_timer:
             self.rebind_timer.cancel()
+        if self.retransmit_timer:
+            self.retransmit_timer.cancel()
 
         if self.recv_thread:
             self.recv_thread.join(timeout=2)
@@ -94,6 +109,9 @@ class DHCPv6Client:
         mode = "via Relay" if self.relay_server else "multicast"
         self.logger.info(f"Sending SOLICIT message ({mode})")
         self.state = self.STATE_SOLICIT
+
+        # 재전송 상태 초기화
+        self._cancel_retransmit_timer()
 
         pkt = self.packet_builder.build_solicit(
             request_ia_na=True,
@@ -116,8 +134,17 @@ class DHCPv6Client:
                 self._set_src_addr(pkt)
                 self.logger.debug(f"SOLICIT wrapped in RELAY-FORW to {self.relay_server}")
 
-            send(pkt, iface=self.interface, verbose=False)
+            # L2 레벨 전송 (Ether 헤더 추가)
+            pkt_l2 = self._add_ether_header(pkt)
+            sendp(pkt_l2, iface=self.interface, verbose=False)
             self.logger.debug("SOLICIT sent successfully")
+
+            # 재전송 타이머 스케줄 (RFC 8415)
+            rt = self._calculate_retransmission_time(self.SOL_TIMEOUT, self.SOL_MAX_RT)
+            self.retransmit_timer = threading.Timer(rt, self._retransmit_solicit)
+            self.retransmit_timer.start()
+            self.logger.debug(f"SOLICIT retransmission scheduled in {rt:.1f}s")
+
         except Exception as e:
             self.logger.error(f"Failed to send SOLICIT: {e}")
 
@@ -126,6 +153,9 @@ class DHCPv6Client:
         mode = "via Relay" if self.relay_server else "multicast"
         self.logger.info(f"Sending REQUEST message ({mode})")
         self.state = self.STATE_REQUEST
+
+        # 재전송 상태 초기화
+        self._cancel_retransmit_timer()
 
         # ADVERTISE에서 받은 주소/prefix 사용
         ia_na_addr = self.assigned_addresses[0]['address'] if self.assigned_addresses else None
@@ -155,8 +185,17 @@ class DHCPv6Client:
                 self._set_src_addr(pkt)
                 self.logger.debug(f"REQUEST wrapped in RELAY-FORW to {self.relay_server}")
 
-            send(pkt, iface=self.interface, verbose=False)
+            # L2 레벨 전송 (Ether 헤더 추가)
+            pkt_l2 = self._add_ether_header(pkt)
+            sendp(pkt_l2, iface=self.interface, verbose=False)
             self.logger.debug("REQUEST sent successfully")
+
+            # 재전송 타이머 스케줄 (RFC 8415)
+            rt = self._calculate_retransmission_time(self.REQ_TIMEOUT, self.REQ_MAX_RT)
+            self.retransmit_timer = threading.Timer(rt, self._retransmit_request)
+            self.retransmit_timer.start()
+            self.logger.debug(f"REQUEST retransmission scheduled in {rt:.1f}s")
+
         except Exception as e:
             self.logger.error(f"Failed to send REQUEST: {e}")
 
@@ -193,7 +232,9 @@ class DHCPv6Client:
                 self._set_src_addr(pkt)
                 self.logger.debug(f"RENEW wrapped in RELAY-FORW to {self.relay_server}")
 
-            send(pkt, iface=self.interface, verbose=False)
+            # L2 레벨 전송 (Ether 헤더 추가)
+            pkt_l2 = self._add_ether_header(pkt)
+            sendp(pkt_l2, iface=self.interface, verbose=False)
             self.logger.debug("RENEW sent successfully")
         except Exception as e:
             self.logger.error(f"Failed to send RENEW: {e}")
@@ -216,7 +257,9 @@ class DHCPv6Client:
 
         try:
             self._set_src_addr(pkt)
-            send(pkt, iface=self.interface, verbose=False)
+            # L2 레벨 전송 (Ether 헤더 추가)
+            pkt_l2 = self._add_ether_header(pkt)
+            sendp(pkt_l2, iface=self.interface, verbose=False)
             self.logger.debug("REBIND sent successfully")
         except Exception as e:
             self.logger.error(f"Failed to send REBIND: {e}")
@@ -271,6 +314,9 @@ class DHCPv6Client:
         """ADVERTISE 메시지 처리"""
         self.logger.info("Received ADVERTISE message")
 
+        # 재전송 타이머 취소
+        self._cancel_retransmit_timer()
+
         parsed = DHCPv6Packet.parse_reply(pkt)
 
         if parsed['server_duid']:
@@ -292,6 +338,9 @@ class DHCPv6Client:
     def _handle_reply(self, pkt):
         """REPLY 메시지 처리 (REQUEST에 대한 응답)"""
         self.logger.info("Received REPLY message")
+
+        # 재전송 타이머 취소
+        self._cancel_retransmit_timer()
 
         parsed = DHCPv6Packet.parse_reply(pkt)
 
@@ -408,6 +457,37 @@ class DHCPv6Client:
         except Exception as e:
             self.logger.warning(f"Could not set source address: {e}")
 
+    def _add_ether_header(self, pkt):
+        """
+        IPv6 패킷에 Ether 헤더 추가 (L2 전송용)
+
+        Args:
+            pkt: IPv6 패킷
+
+        Returns:
+            Ether/IPv6 패킷
+        """
+        # DHCPv6 멀티캐스트 주소 ff02::1:2의 MAC 주소: 33:33:00:01:00:02
+        if pkt.haslayer(IPv6):
+            dst_ip = pkt[IPv6].dst
+            if dst_ip.startswith("ff02::1:2"):
+                # DHCPv6 멀티캐스트 MAC
+                dst_mac = "33:33:00:01:00:02"
+            elif dst_ip.startswith("ff"):
+                # 일반 IPv6 멀티캐스트 MAC 계산
+                # ff02::1:2 → 33:33:00:01:00:02
+                ipv6_suffix = dst_ip.split(":")[-2:]
+                mac_suffix = ":".join([f"{int(x, 16):02x}" for x in ipv6_suffix if x])
+                dst_mac = f"33:33:{mac_suffix}" if mac_suffix else "33:33:00:01:00:02"
+            else:
+                # 유니캐스트 - NDP로 MAC 주소 찾기 (간단히 브로드캐스트 사용)
+                dst_mac = "ff:ff:ff:ff:ff:ff"
+        else:
+            dst_mac = "ff:ff:ff:ff:ff:ff"
+
+        # Ether 헤더 추가
+        return Ether(dst=dst_mac) / pkt
+
     def get_status(self):
         """클라이언트 상태 정보 반환"""
         return {
@@ -417,3 +497,142 @@ class DHCPv6Client:
             'prefixes': self.assigned_prefixes,
             'server_duid': self.server_duid.hex() if self.server_duid else None
         }
+
+    def _calculate_retransmission_time(self, irt, mrt):
+        """
+        RFC 8415 Exponential Backoff 재전송 시간 계산
+
+        Args:
+            irt: 초기 재전송 타임아웃
+            mrt: 최대 재전송 타임아웃
+
+        Returns:
+            다음 재전송까지의 시간 (초)
+        """
+        import random
+
+        if self.retry_count == 0:
+            # 첫 전송
+            rt = irt
+        else:
+            # Exponential backoff: RT = 2*RTprev + RAND*RTprev
+            # RAND는 -0.1 ~ +0.1 범위
+            rand = random.uniform(-0.1, 0.1)
+            rt = 2 * self.current_rt + rand * self.current_rt
+
+        # MRT 제한
+        if rt > mrt:
+            rand = random.uniform(-0.1, 0.1)
+            rt = mrt + rand * mrt
+
+        # 음수 방지
+        rt = max(0.1, rt)
+
+        self.current_rt = rt
+        return rt
+
+    def _cancel_retransmit_timer(self):
+        """재전송 타이머 취소"""
+        if self.retransmit_timer:
+            self.retransmit_timer.cancel()
+            self.retransmit_timer = None
+        self.retry_count = 0
+        self.current_rt = 0
+
+    def _retransmit_solicit(self):
+        """SOLICIT 재전송 (RFC 8415)"""
+        if not self.running or self.state != self.STATE_SOLICIT:
+            return
+
+        self.retry_count += 1
+        rt = self._calculate_retransmission_time(self.SOL_TIMEOUT, self.SOL_MAX_RT)
+
+        self.logger.info(f"Retransmitting SOLICIT (attempt {self.retry_count}, next in {rt:.1f}s)")
+
+        # SOLICIT 재전송
+        pkt = self.packet_builder.build_solicit(
+            request_ia_na=True,
+            request_ia_pd=self.request_prefix
+        )
+
+        try:
+            self._set_src_addr(pkt)
+
+            # Relay 모드: RELAY-FORW로 감싸기
+            if self.relay_server:
+                peer_addr = pkt[IPv6].src if pkt.haslayer(IPv6) else None
+                pkt = self.packet_builder.build_relay_forward(
+                    client_message=pkt,
+                    server_address=self.relay_server,
+                    relay_address=self.relay_address,
+                    peer_address=peer_addr
+                )
+                self._set_src_addr(pkt)
+
+            # L2 레벨 전송 (Ether 헤더 추가)
+            pkt_l2 = self._add_ether_header(pkt)
+            sendp(pkt_l2, iface=self.interface, verbose=False)
+
+            # 다음 재전송 스케줄 (무제한)
+            self.retransmit_timer = threading.Timer(rt, self._retransmit_solicit)
+            self.retransmit_timer.start()
+
+        except Exception as e:
+            self.logger.error(f"Failed to retransmit SOLICIT: {e}")
+
+    def _retransmit_request(self):
+        """REQUEST 재전송 (RFC 8415)"""
+        if not self.running or self.state != self.STATE_REQUEST:
+            return
+
+        # 최대 재시도 횟수 확인
+        if self.retry_count >= self.REQ_MAX_RC:
+            self.logger.warning(f"REQUEST max retries ({self.REQ_MAX_RC}) reached, giving up")
+            self._cancel_retransmit_timer()
+            # SOLICIT으로 되돌아가기
+            self.logger.info("Falling back to SOLICIT")
+            self._send_solicit()
+            return
+
+        self.retry_count += 1
+        rt = self._calculate_retransmission_time(self.REQ_TIMEOUT, self.REQ_MAX_RT)
+
+        self.logger.info(f"Retransmitting REQUEST (attempt {self.retry_count}/{self.REQ_MAX_RC}, next in {rt:.1f}s)")
+
+        # REQUEST 재전송
+        ia_na_addr = self.assigned_addresses[0]['address'] if self.assigned_addresses else None
+        ia_pd_prefix = None
+        if self.assigned_prefixes:
+            prefix_info = self.assigned_prefixes[0]
+            ia_pd_prefix = (prefix_info['prefix'], prefix_info['prefix_length'])
+
+        pkt = self.packet_builder.build_request(
+            server_duid=self.server_duid,
+            ia_na_addr=ia_na_addr,
+            ia_pd_prefix=ia_pd_prefix
+        )
+
+        try:
+            self._set_src_addr(pkt)
+
+            # Relay 모드: RELAY-FORW로 감싸기
+            if self.relay_server:
+                peer_addr = pkt[IPv6].src if pkt.haslayer(IPv6) else None
+                pkt = self.packet_builder.build_relay_forward(
+                    client_message=pkt,
+                    server_address=self.relay_server,
+                    relay_address=self.relay_address,
+                    peer_address=peer_addr
+                )
+                self._set_src_addr(pkt)
+
+            # L2 레벨 전송 (Ether 헤더 추가)
+            pkt_l2 = self._add_ether_header(pkt)
+            sendp(pkt_l2, iface=self.interface, verbose=False)
+
+            # 다음 재전송 스케줄
+            self.retransmit_timer = threading.Timer(rt, self._retransmit_request)
+            self.retransmit_timer.start()
+
+        except Exception as e:
+            self.logger.error(f"Failed to retransmit REQUEST: {e}")
