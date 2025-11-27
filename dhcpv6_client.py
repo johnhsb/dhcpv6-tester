@@ -363,6 +363,14 @@ class DHCPv6Client:
 
         parsed = DHCPv6Packet.parse_reply(pkt)
 
+        # 디버그: 파싱 결과 상세 로깅
+        self.logger.debug(f"Parsed ADVERTISE - Server DUID: {parsed['server_duid'].hex() if parsed['server_duid'] else 'None'}")
+        self.logger.debug(f"Parsed ADVERTISE - Addresses: {parsed['addresses']}")
+        self.logger.debug(f"Parsed ADVERTISE - Prefixes: {parsed['prefixes']}")
+
+        if self.logger.isEnabledFor(logging.DEBUG):
+            self.logger.debug(f"--- Received ADVERTISE Packet ---\n{_format_packet_for_logging(pkt)}")
+
         if parsed['server_duid']:
             self.server_duid = parsed['server_duid']
             self.assigned_addresses = parsed['addresses']
@@ -371,6 +379,7 @@ class DHCPv6Client:
             # 제안된 주소나 프리픽스가 없으면 REQUEST를 보내지 않음
             if not self.assigned_addresses and not self.assigned_prefixes:
                 self.logger.warning("Received ADVERTISE with no addresses or prefixes. Ignoring.")
+                self.logger.warning("This may indicate: (1) Server has no addresses in pool, (2) IAID mismatch, (3) Parsing error")
                 return
 
             self.logger.info(f"Server DUID: {self.server_duid.hex()}")
