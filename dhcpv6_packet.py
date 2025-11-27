@@ -156,11 +156,11 @@ class DHCPv6Packet:
                 T1=0,
                 T2=0
             )
-            # RFC 8415 및 호환성을 위해 lifetime은 0xffffffff(무한대)로 설정
+            # RFC 8415 및 호환성을 위해 lifetime은 0로 설정
             ia_addr = DHCP6OptIAAddress(
                 addr=ia_na_addr,
-                preflft=0xffffffff,
-                validlft=0xffffffff
+                preflft=0,
+                validlft=0
             )
             ia_na /= ia_addr
             dhcp6_msg /= ia_na
@@ -173,12 +173,12 @@ class DHCPv6Packet:
                 T2=0
             )
             prefix, prefixlen = ia_pd_prefix
-            # RFC 8415 및 호환성을 위해 lifetime은 0xffffffff(무한대)로 설정
+            # RFC 8415: REQUEST에서 lifetime은 0으로 설정 (서버에게 값 요청)
             ia_prefix = DHCP6OptIAPrefix(
                 prefix=prefix,
                 plen=prefixlen,
-                preflft=0xffffffff,
-                validlft=0xffffffff
+                preflft=0,
+                validlft=0
             )
             ia_pd /= ia_prefix
             dhcp6_msg /= ia_pd
