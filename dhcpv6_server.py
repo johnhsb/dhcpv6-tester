@@ -224,6 +224,9 @@ class DHCPv6Server:
             return
 
         client_duid = pkt[DHCP6OptClientId].duid
+        # DUID를 bytes로 변환 (RELAY-FORW 처리 시 타입이 다를 수 있음)
+        if not isinstance(client_duid, bytes):
+            client_duid = bytes(client_duid)
 
         # DHCP6_Solicit 레이어가 없으면 DHCP6 레이어 사용 (RELAY-FORW 처리용)
         dhcp6_layer = pkt[DHCP6_Solicit] if pkt.haslayer(DHCP6_Solicit) else pkt[DHCP6]
@@ -332,6 +335,9 @@ class DHCPv6Server:
             return
 
         client_duid = pkt[DHCP6OptClientId].duid
+        # DUID를 bytes로 변환 (RELAY-FORW 처리 시 타입이 다를 수 있음)
+        if not isinstance(client_duid, bytes):
+            client_duid = bytes(client_duid)
 
         # DHCP6_Request 레이어가 없으면 DHCP6 레이어 사용 (RELAY-FORW 처리용)
         dhcp6_layer = pkt[DHCP6_Request] if pkt.haslayer(DHCP6_Request) else pkt[DHCP6]
