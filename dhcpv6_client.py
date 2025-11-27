@@ -3,6 +3,8 @@
 import time
 import threading
 import logging
+import io
+import contextlib
 from scapy.all import *
 from scapy.layers.inet6 import IPv6, UDP
 from scapy.layers.dhcp6 import DHCP6_Advertise, DHCP6_Reply, DHCP6_RelayReply
@@ -14,6 +16,13 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
+
+
+def _format_packet_for_logging(pkt: Packet) -> str:
+    """scapy 패킷의 상세 내용을 로깅을 위한 문자열로 변환"""
+    with io.StringIO() as buf, contextlib.redirect_stdout(buf):
+        pkt.show()
+        return buf.getvalue()
 
 
 class DHCPv6Client:
@@ -180,6 +189,12 @@ class DHCPv6Client:
 
         try:
             self._set_src_addr(pkt)
+
+            # 디버그 모드일 때 전송할 패킷의 상세 내용 로깅
+            if self.logger.isEnabledFor(logging.DEBUG):
+                # 전송 직전의 패킷 상태를 로깅
+                log_pkt = relay_pkt if self.relay_server else pkt
+                self.logger.debug(f"--- Sending REQUEST Packet ---\n{_format_packet_for_logging(log_pkt)}")
 
             # 전송 로직: Relay, Unicast, Multicast 순으로 처리
             if self.relay_server:
