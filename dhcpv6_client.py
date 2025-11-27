@@ -58,6 +58,7 @@ class DHCPv6Client:
         # 상태 관리
         self.state = self.STATE_INIT
         self.server_duid = None
+        self.server_address = None  # 서버 IPv6 주소 (unicast REQUEST용)
         self.assigned_addresses = []
         self.assigned_prefixes = []
 
@@ -150,7 +151,14 @@ class DHCPv6Client:
 
     def _send_request(self):
         """REQUEST 메시지 전송"""
-        mode = "via Relay" if self.relay_server else "multicast"
+        # 전송 모드 결정
+        if self.relay_server:
+            mode = "via Relay"
+        elif self.server_address:
+            mode = f"unicast to {self.server_address}"
+        else:
+            mode = "multicast"
+
         self.logger.info(f"Sending REQUEST message ({mode})")
         self.state = self.STATE_REQUEST
 
@@ -171,6 +179,10 @@ class DHCPv6Client:
         )
 
         try:
+            # 서버 주소가 있으면 unicast로 전송 (RFC 8415 권장)
+            if self.server_address and not self.relay_server:
+                pkt[IPv6].dst = self.server_address
+
             self._set_src_addr(pkt)
 
             # Relay 모드: RELAY-FORW로 감싸기
@@ -320,6 +332,11 @@ class DHCPv6Client:
 
         # 재전송 타이머 취소
         self._cancel_retransmit_timer()
+
+        # 서버 IPv6 주소 저장 (unicast REQUEST용)
+        if pkt.haslayer(IPv6):
+            self.server_address = pkt[IPv6].src
+            self.logger.debug(f"Server address: {self.server_address}")
 
         parsed = DHCPv6Packet.parse_reply(pkt)
 
