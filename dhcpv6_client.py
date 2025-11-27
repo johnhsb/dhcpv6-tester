@@ -529,8 +529,11 @@ class DHCPv6Client:
                 mac_suffix = ":".join([f"{int(x, 16):02x}" for x in ipv6_suffix if x])
                 dst_mac = f"33:33:{mac_suffix}" if mac_suffix else "33:33:00:01:00:02"
             else:
-                # 유니캐스트 - NDP로 MAC 주소 찾기 (간단히 브로드캐스트 사용)
-                dst_mac = "ff:ff:ff:ff:ff:ff"
+                # 유니캐스트: NDP를 통해 목적지 MAC 주소 확인
+                dst_mac = getmacbyip6(dst_ip, iface=self.interface)
+                if not dst_mac:
+                    self.logger.warning(f"Could not resolve MAC for {dst_ip}, using broadcast")
+                    dst_mac = "ff:ff:ff:ff:ff:ff"
         else:
             dst_mac = "ff:ff:ff:ff:ff:ff"
 
