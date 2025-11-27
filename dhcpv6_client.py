@@ -211,12 +211,14 @@ class DHCPv6Client:
             elif self.server_address:
                 # 2. Unicast 모드: 서버 주소로 직접 유니캐스트 전송
                 pkt[IPv6].dst = self.server_address
+                
+                # L2 헤더를 추가하여 전송
+                pkt_l2 = self._add_ether_header(pkt)
 
                 if self.logger.isEnabledFor(logging.DEBUG):
-                    self.logger.debug(f"--- Sending REQUEST Packet (Unicast L3) ---\n{_format_packet_for_logging(pkt)}")
+                    self.logger.debug(f"--- Sending REQUEST Packet (Unicast) ---\n{_format_packet_for_logging(pkt_l2)}")
 
-                # L3에서 send()를 사용하면 Scapy가 자동으로 NDP를 통해 MAC 주소를 확인함
-                send(pkt, iface=self.interface, verbose=False)
+                sendp(pkt_l2, iface=self.interface, verbose=False)
                 self.logger.debug(f"REQUEST (unicast) sent successfully to {self.server_address}")
 
             else:
@@ -527,8 +529,19 @@ class DHCPv6Client:
                 mac_suffix = ":".join([f"{int(x, 16):02x}" for x in ipv6_suffix if x])
                 dst_mac = f"33:33:{mac_suffix}" if mac_suffix else "33:33:00:01:00:02"
             else:
-                # 유니캐스트 - NDP로 MAC 주소 찾기 (간단히 브로드캐스트 사용)
-                dst_mac = "ff:ff:ff:ff:ff:ff"
+                # 유니캐스트: NDP를 통해 목적지 MAC 주소 확인
+                # 구버전 Scapy 호환성을 위해 conf.iface를 임시로 설정
+                old_iface = conf.iface
+                conf.iface = self.interface
+                dst_mac = None
+                try:
+                    dst_mac = getmacbyip6(dst_ip)
+                finally:
+                    conf.iface = old_iface  # 원래대로 복원
+
+                if not dst_mac:
+                    self.logger.warning(f"Could not resolve MAC for {dst_ip}, using broadcast")
+                    dst_mac = "ff:ff:ff:ff:ff:ff"
         else:
             dst_mac = "ff:ff:ff:ff:ff:ff"
 
