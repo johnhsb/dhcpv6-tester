@@ -322,13 +322,17 @@ class DHCPv6Client:
                 self.logger.error(f"Error handling packet: {e}")
 
         self.logger.debug(f"Starting packet capture (DHCPv6 client port {DHCPV6_CLIENT_PORT})")
-        sniff(
-            iface=self.interface,
-            filter=None,  # BPF 필터 제거 (Python 레벨에서 필터링)
-            prn=packet_handler,
-            store=False,
-            stop_filter=lambda x: not self.running
-        )
+
+        # timeout을 사용하여 주기적으로 self.running 확인
+        while self.running:
+            sniff(
+                iface=self.interface,
+                filter=None,  # BPF 필터 제거 (Python 레벨에서 필터링)
+                prn=packet_handler,
+                store=False,
+                timeout=1,  # 1초마다 타임아웃하여 self.running 확인
+                stop_filter=lambda x: not self.running
+            )
 
     def _handle_packet(self, pkt):
         """수신한 DHCPv6 패킷 처리"""

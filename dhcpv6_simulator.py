@@ -290,10 +290,13 @@ async def main():
         t2_ratio=args.t2_ratio
     )
 
+    # 종료 이벤트 생성
+    stop_event = asyncio.Event()
+
     # 시그널 핸들러 설정
     def signal_handler(sig, frame):
         logger.info("\nReceived interrupt signal, stopping...")
-        asyncio.create_task(simulator.stop())
+        stop_event.set()  # 이벤트를 set하여 즉시 깨우기
 
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
@@ -308,9 +311,13 @@ async def main():
                 simulator.monitor(interval=args.monitor_interval)
             )
 
-            # 지정된 시간 동안 실행
+            # 지정된 시간 동안 실행하거나 종료 신호 대기
             logger.info(f"Running for {args.duration} seconds...")
-            await asyncio.sleep(args.duration)
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=args.duration)
+                logger.info("Stop signal received")
+            except asyncio.TimeoutError:
+                logger.info("Duration completed")
 
             # 정리
             await simulator.stop()
@@ -333,8 +340,12 @@ async def main():
             dashboard_thread = threading.Thread(target=dashboard_runner.start, daemon=True)
             dashboard_thread.start()
 
-            # 지정된 시간 동안 실행
-            await asyncio.sleep(args.duration)
+            # 지정된 시간 동안 실행하거나 종료 신호 대기
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=args.duration)
+                logger.info("Stop signal received")
+            except asyncio.TimeoutError:
+                pass  # Duration completed
 
             # 정리
             dashboard_runner.stop()
