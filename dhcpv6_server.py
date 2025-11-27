@@ -494,7 +494,19 @@ class DHCPv6Server:
             return
 
         relay_msg_opt = pkt[DHCP6OptRelayMsg]
-        client_msg = DHCP6(relay_msg_opt.message)
+
+        # relay_msg_opt.message는 이미 파싱된 DHCPv6 객체
+        # bytes로 변환 후 다시 파싱
+        if hasattr(relay_msg_opt, 'message'):
+            # message가 이미 Packet 객체인 경우 bytes로 변환
+            if hasattr(relay_msg_opt.message, '__bytes__'):
+                client_msg = DHCP6(bytes(relay_msg_opt.message))
+            else:
+                # 이미 파싱된 객체를 그대로 사용
+                client_msg = relay_msg_opt.message
+        else:
+            self.logger.warning("RELAY-FORW without message option")
+            return
 
         # 원본 클라이언트 메시지를 IPv6 패킷으로 재구성
         relay_info = pkt[DHCP6_RelayForward]
