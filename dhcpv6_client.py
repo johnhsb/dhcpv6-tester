@@ -161,12 +161,7 @@ class DHCPv6Client:
     def _send_request(self):
         """REQUEST 메시지 전송"""
         # 전송 모드 결정
-        if self.relay_server:
-            mode = "via Relay"
-        elif self.server_address:
-            mode = f"unicast to {self.server_address}"
-        else:
-            mode = "multicast"
+        mode = "via Relay" if self.relay_server else "multicast (RFC 8415)"
 
         self.logger.info(f"Sending REQUEST message ({mode})")
         self.state = self.STATE_REQUEST
@@ -174,25 +169,35 @@ class DHCPv6Client:
         # 재전송 상태 초기화
         self._cancel_retransmit_timer()
 
-        # ADVERTISE에서 받은 주소/prefix 사용
-        ia_na_addr = self.assigned_addresses[0]['address'] if self.assigned_addresses else None
+        # ADVERTISE에서 받은 주소/prefix 및 lifetime 사용
+        ia_na_addr = None
+        ia_na_lifetime = None
+        if self.assigned_addresses:
+            addr_info = self.assigned_addresses[0]
+            ia_na_addr = addr_info['address']
+            ia_na_lifetime = (addr_info['preferred_lifetime'], addr_info['valid_lifetime'])
+
         ia_pd_prefix = None
+        ia_pd_lifetime = None
         if self.assigned_prefixes:
             prefix_info = self.assigned_prefixes[0]
             ia_pd_prefix = (prefix_info['prefix'], prefix_info['prefix_length'])
+            ia_pd_lifetime = (prefix_info['preferred_lifetime'], prefix_info['valid_lifetime'])
 
         pkt = self.packet_builder.build_request(
             server_duid=self.server_duid,
             ia_na_addr=ia_na_addr,
-            ia_pd_prefix=ia_pd_prefix
+            ia_pd_prefix=ia_pd_prefix,
+            ia_na_lifetime=ia_na_lifetime,
+            ia_pd_lifetime=ia_pd_lifetime
         )
 
         try:
             self._set_src_addr(pkt)
 
-            # 전송 로직: Relay, Unicast, Multicast 순으로 처리
+            # 전송 로직: Relay 또는 Multicast (RFC 8415 준수)
             if self.relay_server:
-                # 1. Relay 모드: RELAY-FORW로 감싸서 릴레이 서버로 유니캐스트 전송
+                # Relay 모드: RELAY-FORW로 감싸서 릴레이 서버로 유니캐스트 전송
                 peer_addr = pkt[IPv6].src if pkt.haslayer(IPv6) else None
                 relay_pkt = self.packet_builder.build_relay_forward(
                     client_message=pkt,
@@ -204,31 +209,21 @@ class DHCPv6Client:
 
                 if self.logger.isEnabledFor(logging.DEBUG):
                     self.logger.debug(f"--- Sending REQUEST Packet (via Relay) ---\n{_format_packet_for_logging(relay_pkt)}")
-                
-                sendp(relay_pkt, iface=self.interface, verbose=False)
+
+                pkt_l2 = self._add_ether_header(relay_pkt)
+                sendp(pkt_l2, iface=self.interface, verbose=False)
                 self.logger.debug(f"REQUEST wrapped in RELAY-FORW sent to {self.relay_server}")
 
-            elif self.server_address:
-                # 2. Unicast 모드: 서버 주소로 직접 유니캐스트 전송
-                pkt[IPv6].dst = self.server_address
-                
-                # L2 헤더를 추가하여 전송
+            else:
+                # Multicast 모드 (RFC 8415 표준): ff02::1:2로 전송
+                # destination은 이미 build_request에서 ff02::1:2로 설정됨
                 pkt_l2 = self._add_ether_header(pkt)
 
                 if self.logger.isEnabledFor(logging.DEBUG):
-                    self.logger.debug(f"--- Sending REQUEST Packet (Unicast) ---\n{_format_packet_for_logging(pkt_l2)}")
+                    self.logger.debug(f"--- Sending REQUEST Packet (Multicast) ---\n{_format_packet_for_logging(pkt_l2)}")
 
                 sendp(pkt_l2, iface=self.interface, verbose=False)
-                self.logger.debug(f"REQUEST (unicast) sent successfully to {self.server_address}")
-
-            else:
-                # 3. Multicast 모드 (비정상): 서버 주소를 모르는 상태에서 REQUEST 전송 불가
-                self.logger.warning(
-                    "Cannot send REQUEST: Server unicast address is unknown. "
-                    "This may happen if the ADVERTISE was malformed. Falling back to SOLICIT."
-                )
-                self._send_solicit()
-                return  # 추가 작업 방지
+                self.logger.debug(f"REQUEST (multicast) sent successfully to ff02::1:2")
 
             # 재전송 타이머 스케줄 (RFC 8415)
             rt = self._calculate_retransmission_time(self.REQ_TIMEOUT, self.REQ_MAX_RT)
@@ -372,6 +367,11 @@ class DHCPv6Client:
             self.server_duid = parsed['server_duid']
             self.assigned_addresses = parsed['addresses']
             self.assigned_prefixes = parsed['prefixes']
+
+            # 제안된 주소나 프리픽스가 없으면 REQUEST를 보내지 않음
+            if not self.assigned_addresses and not self.assigned_prefixes:
+                self.logger.warning("Received ADVERTISE with no addresses or prefixes. Ignoring.")
+                return
 
             self.logger.info(f"Server DUID: {self.server_duid.hex()}")
             for addr_info in self.assigned_addresses:
@@ -659,35 +659,48 @@ class DHCPv6Client:
 
         self.logger.info(f"Retransmitting REQUEST (attempt {self.retry_count}/{self.REQ_MAX_RC}, next in {rt:.1f}s)")
 
-        # REQUEST 재전송
-        ia_na_addr = self.assigned_addresses[0]['address'] if self.assigned_addresses else None
+        # REQUEST 재전송 (lifetime 값 포함)
+        ia_na_addr = None
+        ia_na_lifetime = None
+        if self.assigned_addresses:
+            addr_info = self.assigned_addresses[0]
+            ia_na_addr = addr_info['address']
+            ia_na_lifetime = (addr_info['preferred_lifetime'], addr_info['valid_lifetime'])
+
         ia_pd_prefix = None
+        ia_pd_lifetime = None
         if self.assigned_prefixes:
             prefix_info = self.assigned_prefixes[0]
             ia_pd_prefix = (prefix_info['prefix'], prefix_info['prefix_length'])
+            ia_pd_lifetime = (prefix_info['preferred_lifetime'], prefix_info['valid_lifetime'])
 
         pkt = self.packet_builder.build_request(
             server_duid=self.server_duid,
             ia_na_addr=ia_na_addr,
-            ia_pd_prefix=ia_pd_prefix
+            ia_pd_prefix=ia_pd_prefix,
+            ia_na_lifetime=ia_na_lifetime,
+            ia_pd_lifetime=ia_pd_lifetime
         )
 
         try:
             self._set_src_addr(pkt)
 
-            # Relay 모드: RELAY-FORW로 감싸기
+            # 전송 로직: Relay 또는 Multicast (RFC 8415 준수)
             if self.relay_server:
+                # Relay 모드: RELAY-FORW로 감싸기
                 peer_addr = pkt[IPv6].src if pkt.haslayer(IPv6) else None
-                pkt = self.packet_builder.build_relay_forward(
+                relay_pkt = self.packet_builder.build_relay_forward(
                     client_message=pkt,
                     server_address=self.relay_server,
                     relay_address=self.relay_address,
                     peer_address=peer_addr
                 )
-                self._set_src_addr(pkt)
+                self._set_src_addr(relay_pkt)
+                pkt_l2 = self._add_ether_header(relay_pkt)
+            else:
+                # Multicast 모드 (RFC 8415 표준)
+                pkt_l2 = self._add_ether_header(pkt)
 
-            # L2 레벨 전송 (Ether 헤더 추가)
-            pkt_l2 = self._add_ether_header(pkt)
             sendp(pkt_l2, iface=self.interface, verbose=False)
 
             # 다음 재전송 스케줄

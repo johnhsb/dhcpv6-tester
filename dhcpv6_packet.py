@@ -88,6 +88,9 @@ class DHCPv6Packet:
         Returns:
             scapy 패킷 객체
         """
+        # 새로운 transaction ID 생성 (RFC 8415: 각 메시지마다 새 ID)
+        self.transaction_id = random.randint(0, 0xFFFFFF)
+
         # DHCPv6 Solicit 메시지
         dhcp6_msg = DHCP6_Solicit(trid=self.transaction_id)
 
@@ -125,7 +128,8 @@ class DHCPv6Packet:
 
         return pkt
 
-    def build_request(self, server_duid, ia_na_addr=None, ia_pd_prefix=None):
+    def build_request(self, server_duid, ia_na_addr=None, ia_pd_prefix=None,
+                      ia_na_lifetime=None, ia_pd_lifetime=None):
         """
         REQUEST 메시지 생성
 
@@ -133,10 +137,15 @@ class DHCPv6Packet:
             server_duid: 서버 DUID
             ia_na_addr: 요청할 IPv6 주소
             ia_pd_prefix: 요청할 Prefix (tuple: prefix, prefixlen)
+            ia_na_lifetime: IA_NA lifetime (tuple: preferred, valid) - ADVERTISE에서 받은 값
+            ia_pd_lifetime: IA_PD lifetime (tuple: preferred, valid) - ADVERTISE에서 받은 값
 
         Returns:
             scapy 패킷 객체
         """
+        # 새로운 transaction ID 생성 (RFC 8415: 각 메시지마다 새 ID)
+        self.transaction_id = random.randint(0, 0xFFFFFF)
+
         # DHCPv6 Request 메시지
         dhcp6_msg = DHCP6_Request(trid=self.transaction_id)
 
@@ -156,11 +165,17 @@ class DHCPv6Packet:
                 T1=0,
                 T2=0
             )
-            # RFC 8415 및 호환성을 위해 lifetime은 0로 설정
+            # ADVERTISE에서 받은 lifetime 값 사용 (상용 서버 호환성)
+            if ia_na_lifetime:
+                preflft, validlft = ia_na_lifetime
+            else:
+                # fallback: ADVERTISE에서 값이 없으면 0 사용
+                preflft, validlft = 0, 0
+
             ia_addr = DHCP6OptIAAddress(
                 addr=ia_na_addr,
-                preflft=0,
-                validlft=0
+                preflft=preflft,
+                validlft=validlft
             )
             ia_na /= ia_addr
             dhcp6_msg /= ia_na
@@ -173,12 +188,18 @@ class DHCPv6Packet:
                 T2=0
             )
             prefix, prefixlen = ia_pd_prefix
-            # RFC 8415: REQUEST에서 lifetime은 0으로 설정 (서버에게 값 요청)
+            # ADVERTISE에서 받은 lifetime 값 사용 (상용 서버 호환성)
+            if ia_pd_lifetime:
+                preflft, validlft = ia_pd_lifetime
+            else:
+                # fallback: ADVERTISE에서 값이 없으면 0 사용
+                preflft, validlft = 0, 0
+
             ia_prefix = DHCP6OptIAPrefix(
                 prefix=prefix,
                 plen=prefixlen,
-                preflft=0,
-                validlft=0
+                preflft=preflft,
+                validlft=validlft
             )
             ia_pd /= ia_prefix
             dhcp6_msg /= ia_pd
@@ -205,6 +226,9 @@ class DHCPv6Packet:
         Returns:
             scapy 패킷 객체
         """
+        # 새로운 transaction ID 생성 (RFC 8415: 각 메시지마다 새 ID)
+        self.transaction_id = random.randint(0, 0xFFFFFF)
+
         # DHCPv6 Renew 메시지
         dhcp6_msg = DHCP6_Renew(trid=self.transaction_id)
 
@@ -267,6 +291,9 @@ class DHCPv6Packet:
         Returns:
             scapy 패킷 객체
         """
+        # 새로운 transaction ID 생성 (RFC 8415: 각 메시지마다 새 ID)
+        self.transaction_id = random.randint(0, 0xFFFFFF)
+
         # DHCPv6 Rebind 메시지
         dhcp6_msg = DHCP6_Rebind(trid=self.transaction_id)
 
