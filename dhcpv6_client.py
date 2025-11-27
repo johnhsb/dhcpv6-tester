@@ -221,10 +221,13 @@ class DHCPv6Client:
                 self.logger.debug(f"REQUEST (unicast) sent successfully to {self.server_address}")
 
             else:
-                # 3. Multicast 모드: L2 헤더를 직접 만들어 멀티캐스트 전송
-                pkt_l2 = self._add_ether_header(pkt)
-                sendp(pkt_l2, iface=self.interface, verbose=False)
-                self.logger.debug("REQUEST (multicast) sent successfully")
+                # 3. Multicast 모드 (비정상): 서버 주소를 모르는 상태에서 REQUEST 전송 불가
+                self.logger.warning(
+                    "Cannot send REQUEST: Server unicast address is unknown. "
+                    "This may happen if the ADVERTISE was malformed. Falling back to SOLICIT."
+                )
+                self._send_solicit()
+                return  # 추가 작업 방지
 
             # 재전송 타이머 스케줄 (RFC 8415)
             rt = self._calculate_retransmission_time(self.REQ_TIMEOUT, self.REQ_MAX_RT)
