@@ -179,28 +179,37 @@ class DHCPv6Client:
         )
 
         try:
-            # 서버 주소가 있으면 unicast로 전송 (RFC 8415 권장)
-            if self.server_address and not self.relay_server:
-                pkt[IPv6].dst = self.server_address
-
             self._set_src_addr(pkt)
 
-            # Relay 모드: RELAY-FORW로 감싸기
+            # 전송 로직: Relay, Unicast, Multicast 순으로 처리
             if self.relay_server:
+                # 1. Relay 모드: RELAY-FORW로 감싸서 릴레이 서버로 유니캐스트 전송
                 peer_addr = pkt[IPv6].src if pkt.haslayer(IPv6) else None
-                pkt = self.packet_builder.build_relay_forward(
+                relay_pkt = self.packet_builder.build_relay_forward(
                     client_message=pkt,
                     server_address=self.relay_server,
                     relay_address=self.relay_address,
                     peer_address=peer_addr
                 )
-                self._set_src_addr(pkt)
-                self.logger.debug(f"REQUEST wrapped in RELAY-FORW to {self.relay_server}")
+                self._set_src_addr(relay_pkt)
+                
+                # scapy가 NDP를 통해 L2 헤더를 처리하도록 L3 패킷을 직접 전송
+                sendp(relay_pkt, iface=self.interface, verbose=False)
+                self.logger.debug(f"REQUEST wrapped in RELAY-FORW sent to {self.relay_server}")
 
-            # L2 레벨 전송 (Ether 헤더 추가)
-            pkt_l2 = self._add_ether_header(pkt)
-            sendp(pkt_l2, iface=self.interface, verbose=False)
-            self.logger.debug("REQUEST sent successfully")
+            elif self.server_address:
+                # 2. Unicast 모드: 서버 주소로 직접 유니캐스트 전송
+                pkt[IPv6].dst = self.server_address
+                
+                # scapy가 NDP를 통해 L2 헤더를 처리하도록 L3 패킷을 직접 전송
+                sendp(pkt, iface=self.interface, verbose=False)
+                self.logger.debug(f"REQUEST (unicast) sent successfully to {self.server_address}")
+
+            else:
+                # 3. Multicast 모드: L2 헤더를 직접 만들어 멀티캐스트 전송
+                pkt_l2 = self._add_ether_header(pkt)
+                sendp(pkt_l2, iface=self.interface, verbose=False)
+                self.logger.debug("REQUEST (multicast) sent successfully")
 
             # 재전송 타이머 스케줄 (RFC 8415)
             rt = self._calculate_retransmission_time(self.REQ_TIMEOUT, self.REQ_MAX_RT)
