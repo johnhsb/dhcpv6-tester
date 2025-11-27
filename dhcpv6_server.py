@@ -514,20 +514,23 @@ class DHCPv6Server:
         client_pkt = IPv6(src=src_addr, dst="ff02::1:2") / UDP(sport=DHCPV6_SERVER_PORT, dport=DHCPV6_CLIENT_PORT) / client_msg
 
         # 클라이언트 메시지 타입에 따라 직접 핸들러 호출 (재귀 방지)
-        if client_msg.haslayer(DHCP6_Solicit):
+        # msgtype 필드로 메시지 타입 확인 (레이어 타입이 아닌 msgtype 값으로 판별)
+        # DHCPv6 메시지 타입: 1=SOLICIT, 3=REQUEST, 5=RENEW, 6=REBIND
+        if client_msg.haslayer(DHCP6_Solicit) or (hasattr(client_msg, 'msgtype') and client_msg.msgtype == 1):
             self.logger.debug("Extracted SOLICIT from RELAY-FORW")
             self._handle_solicit(client_pkt)
-        elif client_msg.haslayer(DHCP6_Request):
+        elif client_msg.haslayer(DHCP6_Request) or (hasattr(client_msg, 'msgtype') and client_msg.msgtype == 3):
             self.logger.debug("Extracted REQUEST from RELAY-FORW")
             self._handle_request(client_pkt)
-        elif client_msg.haslayer(DHCP6_Renew):
+        elif client_msg.haslayer(DHCP6_Renew) or (hasattr(client_msg, 'msgtype') and client_msg.msgtype == 5):
             self.logger.debug("Extracted RENEW from RELAY-FORW")
             self._handle_renew(client_pkt)
-        elif client_msg.haslayer(DHCP6_Rebind):
+        elif client_msg.haslayer(DHCP6_Rebind) or (hasattr(client_msg, 'msgtype') and client_msg.msgtype == 6):
             self.logger.debug("Extracted REBIND from RELAY-FORW")
             self._handle_rebind(client_pkt)
         else:
-            self.logger.warning(f"Unknown message type in RELAY-FORW: {client_msg.summary()}")
+            msgtype = getattr(client_msg, 'msgtype', 'unknown')
+            self.logger.warning(f"Unknown message type in RELAY-FORW: msgtype={msgtype}, {client_msg.summary()}")
 
         # TODO: 실제로는 RELAY-REPL로 응답해야 함 (현재는 직접 클라이언트에게 응답)
 
