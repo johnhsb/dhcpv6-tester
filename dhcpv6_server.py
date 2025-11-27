@@ -224,7 +224,10 @@ class DHCPv6Server:
             return
 
         client_duid = pkt[DHCP6OptClientId].duid
-        transaction_id = pkt[DHCP6_Solicit].trid
+
+        # DHCP6_Solicit 레이어가 없으면 DHCP6 레이어 사용 (RELAY-FORW 처리용)
+        dhcp6_layer = pkt[DHCP6_Solicit] if pkt.haslayer(DHCP6_Solicit) else pkt[DHCP6]
+        transaction_id = dhcp6_layer.trid
 
         # IA_NA 요청 확인
         request_ia_na = pkt.haslayer(DHCP6OptIA_NA)
@@ -329,7 +332,10 @@ class DHCPv6Server:
             return
 
         client_duid = pkt[DHCP6OptClientId].duid
-        transaction_id = pkt[DHCP6_Request].trid
+
+        # DHCP6_Request 레이어가 없으면 DHCP6 레이어 사용 (RELAY-FORW 처리용)
+        dhcp6_layer = pkt[DHCP6_Request] if pkt.haslayer(DHCP6_Request) else pkt[DHCP6]
+        transaction_id = dhcp6_layer.trid
 
         # 요청된 주소/Prefix 추출
         addresses = []
@@ -384,7 +390,9 @@ class DHCPv6Server:
         if not pkt.haslayer(DHCP6OptClientId):
             return
 
-        transaction_id = pkt[DHCP6_Renew].trid
+        # DHCP6_Renew 레이어가 없으면 DHCP6 레이어 사용 (RELAY-FORW 처리용)
+        dhcp6_layer = pkt[DHCP6_Renew] if pkt.haslayer(DHCP6_Renew) else pkt[DHCP6]
+        transaction_id = dhcp6_layer.trid
 
         # 기존 주소/Prefix 갱신
         addresses = []
