@@ -379,27 +379,33 @@ class DHCPv6Packet:
         # IA_NA 주소 추출
         if pkt.haslayer(DHCP6OptIA_NA):
             ia_na = pkt[DHCP6OptIA_NA]
-            if ia_na.haslayer(DHCP6OptIAAddress):
-                for opt in ia_na.iterpayloads():
-                    if isinstance(opt, DHCP6OptIAAddress):
-                        result['addresses'].append({
-                            'address': opt.addr,
-                            'preferred_lifetime': opt.preflft,
-                            'valid_lifetime': opt.validlft
-                        })
+            # IA_NA의 suboptions (ianaopts 필드)에서 IAAddress 추출
+            # getlayer()를 사용하여 중첩된 옵션 순회
+            addr_opt = ia_na.getlayer(DHCP6OptIAAddress)
+            while addr_opt:
+                result['addresses'].append({
+                    'address': addr_opt.addr,
+                    'preferred_lifetime': addr_opt.preflft,
+                    'valid_lifetime': addr_opt.validlft
+                })
+                # 다음 IAAddress 옵션 찾기 (payload 체인에서)
+                addr_opt = addr_opt.payload.getlayer(DHCP6OptIAAddress) if addr_opt.payload else None
 
         # IA_PD Prefix 추출
         if pkt.haslayer(DHCP6OptIA_PD):
             ia_pd = pkt[DHCP6OptIA_PD]
-            if ia_pd.haslayer(DHCP6OptIAPrefix):
-                for opt in ia_pd.iterpayloads():
-                    if isinstance(opt, DHCP6OptIAPrefix):
-                        result['prefixes'].append({
-                            'prefix': opt.prefix,
-                            'prefix_length': opt.plen,
-                            'preferred_lifetime': opt.preflft,
-                            'valid_lifetime': opt.validlft
-                        })
+            # IA_PD의 suboptions (iapdopt 필드)에서 IAPrefix 추출
+            # getlayer()를 사용하여 중첩된 옵션 순회
+            prefix_opt = ia_pd.getlayer(DHCP6OptIAPrefix)
+            while prefix_opt:
+                result['prefixes'].append({
+                    'prefix': prefix_opt.prefix,
+                    'prefix_length': prefix_opt.plen,
+                    'preferred_lifetime': prefix_opt.preflft,
+                    'valid_lifetime': prefix_opt.validlft
+                })
+                # 다음 IAPrefix 옵션 찾기 (payload 체인에서)
+                prefix_opt = prefix_opt.payload.getlayer(DHCP6OptIAPrefix) if prefix_opt.payload else None
 
         return result
 
