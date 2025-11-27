@@ -160,11 +160,6 @@ class DHCPv6Packet:
 
         # IA_NA with requested address
         if ia_na_addr:
-            ia_na = DHCP6OptIA_NA(
-                iaid=self.iaid,
-                T1=0,
-                T2=0
-            )
             # ADVERTISE에서 받은 lifetime 값 사용 (상용 서버 호환성)
             if ia_na_lifetime:
                 preflft, validlft = ia_na_lifetime
@@ -177,16 +172,17 @@ class DHCPv6Packet:
                 preflft=preflft,
                 validlft=validlft
             )
-            ia_na /= ia_addr
+            # IA_NA 옵션 생성 시 ianaopts 필드에 직접 할당
+            ia_na = DHCP6OptIA_NA(
+                iaid=self.iaid,
+                T1=0,
+                T2=0,
+                ianaopts=[ia_addr]  # 리스트로 직접 할당
+            )
             dhcp6_msg /= ia_na
 
         # IA_PD with requested prefix
         if ia_pd_prefix:
-            ia_pd = DHCP6OptIA_PD(
-                iaid=self.iaid + 1,
-                T1=0,
-                T2=0
-            )
             prefix, prefixlen = ia_pd_prefix
             # ADVERTISE에서 받은 lifetime 값 사용 (상용 서버 호환성)
             if ia_pd_lifetime:
@@ -201,7 +197,13 @@ class DHCPv6Packet:
                 preflft=preflft,
                 validlft=validlft
             )
-            ia_pd /= ia_prefix
+            # IA_PD 옵션 생성 시 iapdopt 필드에 직접 할당
+            ia_pd = DHCP6OptIA_PD(
+                iaid=self.iaid + 1,
+                T1=0,
+                T2=0,
+                iapdopt=[ia_prefix]  # 리스트로 직접 할당
+            )
             dhcp6_msg /= ia_pd
 
         # Option Request Option
@@ -243,26 +245,21 @@ class DHCPv6Packet:
 
         # IA_NA with address to renew
         if ia_na_addr:
-            ia_na = DHCP6OptIA_NA(
-                iaid=self.iaid,
-                T1=0,
-                T2=0
-            )
             ia_addr = DHCP6OptIAAddress(
                 addr=ia_na_addr,
                 preflft=3600,
                 validlft=7200
             )
-            ia_na /= ia_addr
+            ia_na = DHCP6OptIA_NA(
+                iaid=self.iaid,
+                T1=0,
+                T2=0,
+                ianaopts=[ia_addr]
+            )
             dhcp6_msg /= ia_na
 
         # IA_PD with prefix to renew
         if ia_pd_prefix:
-            ia_pd = DHCP6OptIA_PD(
-                iaid=self.iaid + 1,
-                T1=0,
-                T2=0
-            )
             prefix, prefixlen = ia_pd_prefix
             ia_prefix = DHCP6OptIAPrefix(
                 prefix=prefix,
@@ -270,7 +267,12 @@ class DHCPv6Packet:
                 preflft=3600,
                 validlft=7200
             )
-            ia_pd /= ia_prefix
+            ia_pd = DHCP6OptIA_PD(
+                iaid=self.iaid + 1,
+                T1=0,
+                T2=0,
+                iapdopt=[ia_prefix]
+            )
             dhcp6_msg /= ia_pd
 
         # IPv6 및 UDP 헤더 추가
@@ -305,26 +307,21 @@ class DHCPv6Packet:
 
         # IA_NA with address to rebind
         if ia_na_addr:
-            ia_na = DHCP6OptIA_NA(
-                iaid=self.iaid,
-                T1=0,
-                T2=0
-            )
             ia_addr = DHCP6OptIAAddress(
                 addr=ia_na_addr,
                 preflft=3600,
                 validlft=7200
             )
-            ia_na /= ia_addr
+            ia_na = DHCP6OptIA_NA(
+                iaid=self.iaid,
+                T1=0,
+                T2=0,
+                ianaopts=[ia_addr]
+            )
             dhcp6_msg /= ia_na
 
         # IA_PD with prefix to rebind
         if ia_pd_prefix:
-            ia_pd = DHCP6OptIA_PD(
-                iaid=self.iaid + 1,
-                T1=0,
-                T2=0
-            )
             prefix, prefixlen = ia_pd_prefix
             ia_prefix = DHCP6OptIAPrefix(
                 prefix=prefix,
@@ -332,7 +329,12 @@ class DHCPv6Packet:
                 preflft=3600,
                 validlft=7200
             )
-            ia_pd /= ia_prefix
+            ia_pd = DHCP6OptIA_PD(
+                iaid=self.iaid + 1,
+                T1=0,
+                T2=0,
+                iapdopt=[ia_prefix]
+            )
             dhcp6_msg /= ia_pd
 
         # IPv6 및 UDP 헤더 추가
