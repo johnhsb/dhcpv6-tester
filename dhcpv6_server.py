@@ -491,6 +491,7 @@ class DHCPv6Server:
 
         # Relay Message Option에서 원본 클라이언트 메시지 추출
         if not pkt.haslayer(DHCP6OptRelayMsg):
+            self.logger.warning("RELAY-FORW without DHCP6OptRelayMsg")
             return
 
         relay_msg_opt = pkt[DHCP6OptRelayMsg]
@@ -509,14 +510,24 @@ class DHCPv6Server:
             return
 
         # 원본 클라이언트 메시지를 IPv6 패킷으로 재구성
-        relay_info = pkt[DHCP6_RelayForward]
         src_addr = self._get_link_local_address()
-
-        # 클라이언트 메시지 처리
         client_pkt = IPv6(src=src_addr, dst="ff02::1:2") / UDP(sport=DHCPV6_SERVER_PORT, dport=DHCPV6_CLIENT_PORT) / client_msg
 
-        # 일반 메시지로 처리
-        self._handle_packet(client_pkt)
+        # 클라이언트 메시지 타입에 따라 직접 핸들러 호출 (재귀 방지)
+        if client_msg.haslayer(DHCP6_Solicit):
+            self.logger.debug("Extracted SOLICIT from RELAY-FORW")
+            self._handle_solicit(client_pkt)
+        elif client_msg.haslayer(DHCP6_Request):
+            self.logger.debug("Extracted REQUEST from RELAY-FORW")
+            self._handle_request(client_pkt)
+        elif client_msg.haslayer(DHCP6_Renew):
+            self.logger.debug("Extracted RENEW from RELAY-FORW")
+            self._handle_renew(client_pkt)
+        elif client_msg.haslayer(DHCP6_Rebind):
+            self.logger.debug("Extracted REBIND from RELAY-FORW")
+            self._handle_rebind(client_pkt)
+        else:
+            self.logger.warning(f"Unknown message type in RELAY-FORW: {client_msg.summary()}")
 
         # TODO: 실제로는 RELAY-REPL로 응답해야 함 (현재는 직접 클라이언트에게 응답)
 
