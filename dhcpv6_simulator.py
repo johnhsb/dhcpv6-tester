@@ -23,7 +23,8 @@ logger = logging.getLogger("DHCPv6Simulator")
 class DHCPv6Simulator:
     """다중 DHCPv6 클라이언트 시뮬레이터"""
 
-    def __init__(self, interface, num_clients=1, request_prefix=False, relay_server=None, relay_address=None):
+    def __init__(self, interface, num_clients=1, request_prefix=False, relay_server=None, relay_address=None,
+                 t1_ratio=0.5, t2_ratio=0.8):
         """
         시뮬레이터 초기화
 
@@ -33,12 +34,16 @@ class DHCPv6Simulator:
             request_prefix: Prefix Delegation 요청 여부
             relay_server: Relay 모드 사용 시 DHCPv6 서버 주소
             relay_address: Relay Agent 주소
+            t1_ratio: T1 (RENEW) 타이머 비율 (기본값: 0.5)
+            t2_ratio: T2 (REBIND) 타이머 비율 (기본값: 0.8)
         """
         self.interface = interface
         self.num_clients = num_clients
         self.request_prefix = request_prefix
         self.relay_server = relay_server
         self.relay_address = relay_address
+        self.t1_ratio = t1_ratio
+        self.t2_ratio = t2_ratio
         self.clients = []
         self.running = False
 
@@ -65,7 +70,9 @@ class DHCPv6Simulator:
                 client_id=f"client-{i+1}",
                 request_prefix=self.request_prefix,
                 relay_server=self.relay_server,
-                relay_address=self.relay_address
+                relay_address=self.relay_address,
+                t1_ratio=self.t1_ratio,
+                t2_ratio=self.t2_ratio
             )
             self.clients.append(client)
 
@@ -227,6 +234,20 @@ async def main():
     )
 
     parser.add_argument(
+        '--t1-ratio',
+        type=float,
+        default=0.5,
+        help='T1 (RENEW) 타이머 비율 (기본값: 0.5 = valid_lifetime의 50%%)'
+    )
+
+    parser.add_argument(
+        '--t2-ratio',
+        type=float,
+        default=0.8,
+        help='T2 (REBIND) 타이머 비율 (기본값: 0.8 = valid_lifetime의 80%%)'
+    )
+
+    parser.add_argument(
         '--no-dashboard',
         action='store_true',
         help='실시간 대시보드 비활성화 (로그 모드 사용)'
@@ -264,7 +285,9 @@ async def main():
         num_clients=args.clients,
         request_prefix=args.prefix_delegation,
         relay_server=args.relay_server,
-        relay_address=args.relay_address
+        relay_address=args.relay_address,
+        t1_ratio=args.t1_ratio,
+        t2_ratio=args.t2_ratio
     )
 
     # 시그널 핸들러 설정

@@ -43,7 +43,8 @@ class DHCPv6Client:
     REQ_MAX_RT = 30      # REQUEST 최대 재전송 타임아웃
     REQ_MAX_RC = 10      # REQUEST 최대 재시도 횟수
 
-    def __init__(self, interface, client_id=None, request_prefix=False, relay_server=None, relay_address=None):
+    def __init__(self, interface, client_id=None, request_prefix=False, relay_server=None, relay_address=None,
+                 t1_ratio=0.5, t2_ratio=0.8):
         """
         DHCPv6 클라이언트 초기화
 
@@ -53,12 +54,16 @@ class DHCPv6Client:
             request_prefix: Prefix Delegation 요청 여부
             relay_server: Relay 모드 사용 시 DHCPv6 서버 주소 (None이면 일반 모드)
             relay_address: Relay Agent 주소 (기본값: "::")
+            t1_ratio: T1 (RENEW) 타이머 비율 (기본값: 0.5)
+            t2_ratio: T2 (REBIND) 타이머 비율 (기본값: 0.8)
         """
         self.interface = interface
         self.request_prefix = request_prefix
         self.client_id = client_id or f"client-{uuid.uuid4().hex[:8]}"
         self.relay_server = relay_server
         self.relay_address = relay_address
+        self.t1_ratio = t1_ratio
+        self.t2_ratio = t2_ratio
         self.logger = logging.getLogger(f"DHCPv6Client[{self.client_id}]")
 
         # 패킷 빌더
@@ -423,15 +428,15 @@ class DHCPv6Client:
         # T1, T2 타이머 설정 (주소가 있는 경우)
         if self.assigned_addresses:
             valid_lifetime = self.assigned_addresses[0]['valid_lifetime']
-            # T1 = 0.5 * valid_lifetime, T2 = 0.8 * valid_lifetime
-            self.renew_interval = valid_lifetime * 0.5
-            self.rebind_interval = valid_lifetime * 0.8
+            # T1/T2 계산 (사용자 정의 ratio 사용)
+            self.renew_interval = valid_lifetime * self.t1_ratio
+            self.rebind_interval = valid_lifetime * self.t2_ratio
 
-            self.logger.info(f"Setting RENEW timer to {self.renew_interval}s")
+            self.logger.info(f"Setting RENEW timer to {self.renew_interval}s (T1={self.t1_ratio:.2f} * {valid_lifetime}s)")
             self.renew_timer = threading.Timer(self.renew_interval, self._send_renew)
             self.renew_timer.start()
 
-            self.logger.info(f"Setting REBIND timer to {self.rebind_interval}s")
+            self.logger.info(f"Setting REBIND timer to {self.rebind_interval}s (T2={self.t2_ratio:.2f} * {valid_lifetime}s)")
             self.rebind_timer = threading.Timer(self.rebind_interval, self._send_rebind)
             self.rebind_timer.start()
 
@@ -456,8 +461,8 @@ class DHCPv6Client:
         # 타이머 재설정
         if self.assigned_addresses:
             valid_lifetime = self.assigned_addresses[0]['valid_lifetime']
-            self.renew_interval = valid_lifetime * 0.5
-            self.rebind_interval = valid_lifetime * 0.8
+            self.renew_interval = valid_lifetime * self.t1_ratio
+            self.rebind_interval = valid_lifetime * self.t2_ratio
 
             self.renew_timer = threading.Timer(self.renew_interval, self._send_renew)
             self.renew_timer.start()
@@ -490,8 +495,8 @@ class DHCPv6Client:
         # 타이머 재설정
         if self.assigned_addresses:
             valid_lifetime = self.assigned_addresses[0]['valid_lifetime']
-            self.renew_interval = valid_lifetime * 0.5
-            self.rebind_interval = valid_lifetime * 0.8
+            self.renew_interval = valid_lifetime * self.t1_ratio
+            self.rebind_interval = valid_lifetime * self.t2_ratio
 
             self.renew_timer = threading.Timer(self.renew_interval, self._send_renew)
             self.renew_timer.start()
