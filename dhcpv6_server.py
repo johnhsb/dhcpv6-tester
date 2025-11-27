@@ -22,7 +22,8 @@ class DHCPv6Server:
 
     def __init__(self, interface, address_pool="2001:db8:1::/64",
                  prefix_pool="2001:db8:2::/48", prefix_length=56,
-                 valid_lifetime=7200, preferred_lifetime=3600):
+                 valid_lifetime=7200, preferred_lifetime=3600,
+                 max_addresses=10000, max_prefixes=1000):
         """
         DHCPv6 서버 초기화
 
@@ -33,20 +34,22 @@ class DHCPv6Server:
             prefix_length: 위임할 prefix 길이
             valid_lifetime: Valid lifetime (초)
             preferred_lifetime: Preferred lifetime (초)
+            max_addresses: 최대 할당 가능 주소 수 (메모리 보호)
+            max_prefixes: 최대 할당 가능 prefix 수 (메모리 보호)
         """
         self.interface = interface
         self.logger = logging.getLogger("DHCPv6Server")
 
-        # 주소 풀 설정
+        # 주소 풀 설정 (on-demand 생성을 위해 네트워크 객체만 저장)
         self.address_network = ipaddress.IPv6Network(address_pool)
-        self.address_pool = list(self.address_network.hosts())
         self.next_address_index = 0
+        self.max_addresses = max_addresses
 
-        # Prefix 풀 설정
+        # Prefix 풀 설정 (on-demand 생성)
         self.prefix_network = ipaddress.IPv6Network(prefix_pool)
         self.prefix_length = prefix_length
-        self.prefix_pool = list(self.prefix_network.subnets(new_prefix=prefix_length))
         self.next_prefix_index = 0
+        self.max_prefixes = max_prefixes
 
         # Lifetime 설정
         self.valid_lifetime = valid_lifetime
@@ -63,6 +66,7 @@ class DHCPv6Server:
         # 패킷 수신 스레드
         self.running = False
         self.recv_thread = None
+        self.cleanup_thread = None
 
         # 통계
         self.stats = {
@@ -80,8 +84,8 @@ class DHCPv6Server:
     def start(self):
         """서버 시작"""
         self.logger.info(f"Starting DHCPv6 server on interface {self.interface}")
-        self.logger.info(f"Address pool: {self.address_network}")
-        self.logger.info(f"Prefix pool: {self.prefix_network} (/{self.prefix_length})")
+        self.logger.info(f"Address pool: {self.address_network} (max: {self.max_addresses})")
+        self.logger.info(f"Prefix pool: {self.prefix_network} (/{self.prefix_length}, max: {self.max_prefixes})")
         self.logger.info(f"Server DUID: {self.server_duid.hex()}")
 
         self.running = True
@@ -89,6 +93,10 @@ class DHCPv6Server:
         # 패킷 수신 스레드 시작
         self.recv_thread = threading.Thread(target=self._recv_packets, daemon=True)
         self.recv_thread.start()
+
+        # Lease 정리 스레드 시작
+        self.cleanup_thread = threading.Thread(target=self._cleanup_expired_leases, daemon=True)
+        self.cleanup_thread.start()
 
     def stop(self):
         """서버 중지"""
@@ -98,25 +106,67 @@ class DHCPv6Server:
         if self.recv_thread:
             self.recv_thread.join(timeout=2)
 
+        if self.cleanup_thread:
+            self.cleanup_thread.join(timeout=2)
+
     def _allocate_address(self):
-        """주소 풀에서 다음 주소 할당"""
-        if self.next_address_index >= len(self.address_pool):
-            self.logger.warning("Address pool exhausted!")
+        """주소 풀에서 다음 주소 할당 (on-demand 생성)"""
+        if self.next_address_index >= self.max_addresses:
+            self.logger.warning("Address pool exhausted (max limit reached)!")
             return None
 
-        addr = str(self.address_pool[self.next_address_index])
+        # 필요할 때만 주소 생성 (메모리 효율적)
+        # network_address + 1부터 시작 (network_address 자체는 네트워크 주소)
+        addr = self.address_network.network_address + self.next_address_index + 1
         self.next_address_index += 1
-        return addr
+        return str(addr)
 
     def _allocate_prefix(self):
-        """Prefix 풀에서 다음 prefix 할당"""
-        if self.next_prefix_index >= len(self.prefix_pool):
+        """Prefix 풀에서 다음 prefix 할당 (on-demand 생성)"""
+        # 가능한 총 prefix 개수 계산
+        prefix_bits = self.prefix_length - self.prefix_network.prefixlen
+        total_prefixes = 2 ** prefix_bits
+
+        if self.next_prefix_index >= min(total_prefixes, self.max_prefixes):
             self.logger.warning("Prefix pool exhausted!")
             return None
 
-        prefix = self.prefix_pool[self.next_prefix_index]
+        # 비트 연산으로 N번째 서브넷 주소 계산 (메모리 효율적)
+        offset = self.next_prefix_index << (128 - self.prefix_length)
+        prefix_addr = self.prefix_network.network_address + offset
         self.next_prefix_index += 1
-        return (str(prefix.network_address), self.prefix_length)
+
+        return (str(prefix_addr), self.prefix_length)
+
+    def _cleanup_expired_leases(self):
+        """만료된 lease 주기적으로 정리 (메모리 누수 방지)"""
+        self.logger.info("Lease cleanup thread started")
+
+        while self.running:
+            time.sleep(60)  # 1분마다 정리
+
+            if not self.running:
+                break
+
+            with self.lease_lock:
+                current_time = time.time()
+                expired_duids = []
+
+                # 만료된 lease 찾기
+                for client_duid, lease_info in self.leases.items():
+                    lease_age = current_time - lease_info['timestamp']
+                    if lease_age > self.valid_lifetime:
+                        expired_duids.append(client_duid)
+
+                # 만료된 lease 제거
+                for duid in expired_duids:
+                    del self.leases[duid]
+                    self.logger.debug(f"Cleaned up expired lease: {duid[:16]}...")
+
+                if expired_duids:
+                    self.logger.info(f"Cleaned up {len(expired_duids)} expired lease(s)")
+
+        self.logger.info("Lease cleanup thread stopped")
 
     def _recv_packets(self):
         """DHCPv6 패킷 수신 스레드"""
@@ -476,7 +526,20 @@ class DHCPv6Server:
     def get_stats(self):
         """서버 통계 반환"""
         with self.stats_lock:
-            return self.stats.copy()
+            stats = self.stats.copy()
+
+        # 메모리 사용량 추가
+        try:
+            import psutil
+            process = psutil.Process()
+            stats['memory_mb'] = process.memory_info().rss / 1024 / 1024
+        except ImportError:
+            stats['memory_mb'] = None
+        except Exception as e:
+            self.logger.warning(f"Failed to get memory info: {e}")
+            stats['memory_mb'] = None
+
+        return stats
 
     def get_leases(self):
         """현재 Lease 정보 반환"""

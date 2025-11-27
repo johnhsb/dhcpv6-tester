@@ -34,6 +34,11 @@ def print_statistics(server):
     logger.info(f"Total addresses allocated: {stats['total_addresses_allocated']}")
     logger.info(f"Total prefixes allocated:  {stats['total_prefixes_allocated']}")
     logger.info(f"Active leases:             {len(leases)}")
+
+    # 메모리 사용량 표시
+    if stats.get('memory_mb') is not None:
+        logger.info(f"Memory usage:              {stats['memory_mb']:.2f} MB")
+
     logger.info("=" * 80)
 
     if leases:
@@ -116,6 +121,20 @@ def main():
     )
 
     parser.add_argument(
+        '--max-addresses',
+        type=int,
+        default=10000,
+        help='최대 할당 가능 주소 수 (메모리 보호, 기본값: 10000)'
+    )
+
+    parser.add_argument(
+        '--max-prefixes',
+        type=int,
+        default=1000,
+        help='최대 할당 가능 prefix 수 (메모리 보호, 기본값: 1000)'
+    )
+
+    parser.add_argument(
         '--verbose', '-v',
         action='store_true',
         help='상세 로그 출력'
@@ -140,7 +159,9 @@ def main():
         prefix_pool=args.prefix_pool,
         prefix_length=args.prefix_length,
         valid_lifetime=args.valid_lifetime,
-        preferred_lifetime=args.preferred_lifetime
+        preferred_lifetime=args.preferred_lifetime,
+        max_addresses=args.max_addresses,
+        max_prefixes=args.max_prefixes
     )
 
     # 시그널 핸들러 설정
