@@ -65,6 +65,11 @@ class DHCPv6Simulator:
 
         # 클라이언트를 순차적으로 시작 (간격을 두고)
         for i in range(self.num_clients):
+            # Ctrl-C 등으로 중단 요청 시 즉시 종료
+            if not self.running:
+                logger.info(f"Client creation interrupted at {i}/{self.num_clients}")
+                break
+
             client = DHCPv6Client(
                 interface=self.interface,
                 client_id=f"client-{i+1}",
@@ -81,9 +86,12 @@ class DHCPv6Simulator:
 
             # 다음 클라이언트 시작 전 짧은 지연
             if i < self.num_clients - 1:
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(0.1)
 
-        logger.info(f"All {self.num_clients} clients started")
+        if self.running:
+            logger.info(f"All {self.num_clients} clients started")
+        else:
+            logger.info(f"Started {len(self.clients)}/{self.num_clients} clients before interruption")
 
     async def stop(self):
         """시뮬레이터 중지"""
@@ -381,6 +389,7 @@ async def main():
     # 시그널 핸들러 설정
     def signal_handler(sig, frame):
         logger.info("\nReceived interrupt signal, stopping...")
+        simulator.running = False  # 클라이언트 생성 즉시 중단
         stop_event.set()  # 이벤트를 set하여 즉시 깨우기
 
     signal.signal(signal.SIGINT, signal_handler)
