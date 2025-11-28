@@ -87,6 +87,19 @@ class DHCPv6Client:
         self.retry_count = 0
         self.current_rt = 0
 
+        # 통계 추적
+        self.stats = {
+            'solicit_sent': 0,
+            'advertise_received': 0,
+            'request_sent': 0,
+            'reply_received': 0,
+            'renew_sent': 0,
+            'rebind_sent': 0,
+            'total_retransmissions': 0,
+            'start_time': None,
+            'bound_time': None,
+        }
+
         # 패킷 수신 스레드
         self.running = False
         self.recv_thread = None
@@ -95,6 +108,7 @@ class DHCPv6Client:
         """클라이언트 시작 및 주소 획득 프로세스 시작"""
         self.logger.info(f"Starting DHCPv6 client on interface {self.interface}")
         self.running = True
+        self.stats['start_time'] = time.time()
 
         # 패킷 수신 스레드 시작
         self.recv_thread = threading.Thread(target=self._recv_packets, daemon=True)
@@ -152,6 +166,7 @@ class DHCPv6Client:
             # L2 레벨 전송 (Ether 헤더 추가)
             pkt_l2 = self._add_ether_header(pkt)
             sendp(pkt_l2, iface=self.interface, verbose=False)
+            self.stats['solicit_sent'] += 1
             self.logger.debug("SOLICIT sent successfully")
 
             # 재전송 타이머 스케줄 (RFC 8415)
@@ -217,6 +232,7 @@ class DHCPv6Client:
 
                 pkt_l2 = self._add_ether_header(relay_pkt)
                 sendp(pkt_l2, iface=self.interface, verbose=False)
+                self.stats['request_sent'] += 1
                 self.logger.debug(f"REQUEST wrapped in RELAY-FORW sent to {self.relay_server}")
 
             else:
@@ -228,6 +244,7 @@ class DHCPv6Client:
                     self.logger.debug(f"--- Sending REQUEST Packet (Multicast) ---\n{_format_packet_for_logging(pkt_l2)}")
 
                 sendp(pkt_l2, iface=self.interface, verbose=False)
+                self.stats['request_sent'] += 1
                 self.logger.debug(f"REQUEST (multicast) sent successfully to ff02::1:2")
 
             # 재전송 타이머 스케줄 (RFC 8415)
@@ -275,6 +292,7 @@ class DHCPv6Client:
             # L2 레벨 전송 (Ether 헤더 추가)
             pkt_l2 = self._add_ether_header(pkt)
             sendp(pkt_l2, iface=self.interface, verbose=False)
+            self.stats['renew_sent'] += 1
             self.logger.debug("RENEW sent successfully")
         except Exception as e:
             self.logger.error(f"Failed to send RENEW: {e}")
@@ -300,6 +318,7 @@ class DHCPv6Client:
             # L2 레벨 전송 (Ether 헤더 추가)
             pkt_l2 = self._add_ether_header(pkt)
             sendp(pkt_l2, iface=self.interface, verbose=False)
+            self.stats['rebind_sent'] += 1
             self.logger.debug("REBIND sent successfully")
         except Exception as e:
             self.logger.error(f"Failed to send REBIND: {e}")
@@ -361,6 +380,7 @@ class DHCPv6Client:
     def _handle_advertise(self, pkt):
         """ADVERTISE 메시지 처리"""
         self.logger.info("Received ADVERTISE message")
+        self.stats['advertise_received'] += 1
 
         # 재전송 타이머 취소
         self._cancel_retransmit_timer()
@@ -405,6 +425,7 @@ class DHCPv6Client:
     def _handle_reply(self, pkt):
         """REPLY 메시지 처리 (REQUEST에 대한 응답)"""
         self.logger.info("Received REPLY message")
+        self.stats['reply_received'] += 1
 
         # 재전송 타이머 취소
         self._cancel_retransmit_timer()
@@ -428,6 +449,8 @@ class DHCPv6Client:
 
         # BOUND 상태로 전환
         self.state = self.STATE_BOUND
+        if self.stats['bound_time'] is None:
+            self.stats['bound_time'] = time.time()
 
         # T1, T2 타이머 설정 (주소가 있는 경우)
         if self.assigned_addresses:
@@ -573,7 +596,8 @@ class DHCPv6Client:
             'state': self.state,
             'addresses': self.assigned_addresses,
             'prefixes': self.assigned_prefixes,
-            'server_duid': self.server_duid.hex() if self.server_duid else None
+            'server_duid': self.server_duid.hex() if self.server_duid else None,
+            'stats': self.stats.copy()
         }
 
     def _calculate_retransmission_time(self, irt, mrt):
@@ -623,6 +647,7 @@ class DHCPv6Client:
             return
 
         self.retry_count += 1
+        self.stats['total_retransmissions'] += 1
         rt = self._calculate_retransmission_time(self.SOL_TIMEOUT, self.SOL_MAX_RT)
 
         self.logger.info(f"Retransmitting SOLICIT (attempt {self.retry_count}, next in {rt:.1f}s)")
@@ -673,6 +698,7 @@ class DHCPv6Client:
             return
 
         self.retry_count += 1
+        self.stats['total_retransmissions'] += 1
         rt = self._calculate_retransmission_time(self.REQ_TIMEOUT, self.REQ_MAX_RT)
 
         self.logger.info(f"Retransmitting REQUEST (attempt {self.retry_count}/{self.REQ_MAX_RC}, next in {rt:.1f}s)")

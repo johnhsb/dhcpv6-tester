@@ -99,33 +99,71 @@ class DHCPv6Simulator:
 
         logger.info("All clients stopped")
 
-    async def monitor(self, interval=10):
-        """클라이언트 상태 모니터링"""
+    async def monitor(self, interval=5):
+        """클라이언트 상태 모니터링 (5초 단위 통계 출력)"""
         while self.running:
             await asyncio.sleep(interval)
 
             if not self.running:
                 break
 
-            logger.info("=" * 80)
-            logger.info(f"Status Report ({len(self.clients)} clients)")
-            logger.info("=" * 80)
+            # 통합 통계 수집
+            total_clients = len(self.clients)
+            total_solicit = 0
+            total_advertise = 0
+            total_request = 0
+            total_reply = 0
+            total_renew = 0
+            total_rebind = 0
+            total_retrans = 0
+            bound_clients = 0
+            total_addresses = 0
+            total_prefixes = 0
+
+            # 평균 SARR 시간 계산을 위한 변수
+            sarr_times = []
 
             for client in self.clients:
                 status = client.get_status()
-                logger.info(f"\n[{status['client_id']}]")
-                logger.info(f"  State: {status['state']}")
+                stats = status.get('stats', {})
 
-                if status['addresses']:
-                    logger.info(f"  Addresses:")
-                    for addr in status['addresses']:
-                        logger.info(f"    - {addr['address']}")
+                total_solicit += stats.get('solicit_sent', 0)
+                total_advertise += stats.get('advertise_received', 0)
+                total_request += stats.get('request_sent', 0)
+                total_reply += stats.get('reply_received', 0)
+                total_renew += stats.get('renew_sent', 0)
+                total_rebind += stats.get('rebind_sent', 0)
+                total_retrans += stats.get('total_retransmissions', 0)
 
-                if status['prefixes']:
-                    logger.info(f"  Prefixes:")
-                    for prefix in status['prefixes']:
-                        logger.info(f"    - {prefix['prefix']}/{prefix['prefix_length']}")
+                if status['state'] == DHCPv6Client.STATE_BOUND:
+                    bound_clients += 1
 
+                    # SARR 완료 시간 계산
+                    start_time = stats.get('start_time')
+                    bound_time = stats.get('bound_time')
+                    if start_time and bound_time:
+                        sarr_times.append(bound_time - start_time)
+
+                total_addresses += len(status['addresses'])
+                total_prefixes += len(status['prefixes'])
+
+            # 성공률 계산
+            success_rate = (bound_clients / total_clients * 100) if total_clients > 0 else 0
+
+            # SARR 평균 시간 계산
+            avg_sarr_time = sum(sarr_times) / len(sarr_times) if sarr_times else 0
+
+            # 통계 출력
+            logger.info("=" * 80)
+            logger.info(f"[Statistics] Total Clients: {total_clients}")
+            logger.info(f"  SOLICIT Sent: {total_solicit} | ADVERTISE Rcvd: {total_advertise}")
+            logger.info(f"  REQUEST Sent: {total_request} | REPLY Rcvd: {total_reply}")
+            logger.info(f"  RENEW Sent: {total_renew} | REBIND Sent: {total_rebind}")
+            logger.info(f"  Total Retransmissions: {total_retrans}")
+            logger.info(f"  BOUND Clients: {bound_clients}/{total_clients} ({success_rate:.1f}%)")
+            logger.info(f"  Addresses Assigned: {total_addresses} | Prefixes Assigned: {total_prefixes}")
+            if avg_sarr_time > 0:
+                logger.info(f"  Avg SARR Time: {avg_sarr_time:.2f}s")
             logger.info("=" * 80)
 
     def print_summary(self):
@@ -134,21 +172,68 @@ class DHCPv6Simulator:
         logger.info("Final Summary")
         logger.info("=" * 80)
 
+        # 통합 통계 수집
+        total_clients = len(self.clients)
+        total_solicit = 0
+        total_advertise = 0
+        total_request = 0
+        total_reply = 0
+        total_renew = 0
+        total_rebind = 0
+        total_retrans = 0
         bound_clients = 0
         total_addresses = 0
         total_prefixes = 0
+        sarr_times = []
 
         for client in self.clients:
             status = client.get_status()
+            stats = status.get('stats', {})
+
+            total_solicit += stats.get('solicit_sent', 0)
+            total_advertise += stats.get('advertise_received', 0)
+            total_request += stats.get('request_sent', 0)
+            total_reply += stats.get('reply_received', 0)
+            total_renew += stats.get('renew_sent', 0)
+            total_rebind += stats.get('rebind_sent', 0)
+            total_retrans += stats.get('total_retransmissions', 0)
+
             if status['state'] == DHCPv6Client.STATE_BOUND:
                 bound_clients += 1
+                start_time = stats.get('start_time')
+                bound_time = stats.get('bound_time')
+                if start_time and bound_time:
+                    sarr_times.append(bound_time - start_time)
+
             total_addresses += len(status['addresses'])
             total_prefixes += len(status['prefixes'])
 
-        logger.info(f"Total Clients: {len(self.clients)}")
-        logger.info(f"Bound Clients: {bound_clients}")
-        logger.info(f"Total Addresses Assigned: {total_addresses}")
-        logger.info(f"Total Prefixes Assigned: {total_prefixes}")
+        # 성공률 계산
+        success_rate = (bound_clients / total_clients * 100) if total_clients > 0 else 0
+        avg_sarr_time = sum(sarr_times) / len(sarr_times) if sarr_times else 0
+
+        # 통계 출력
+        logger.info(f"\nTotal Clients: {total_clients}")
+        logger.info(f"BOUND Clients: {bound_clients} ({success_rate:.1f}%)")
+        logger.info(f"\nSARR Statistics:")
+        logger.info(f"  SOLICIT Sent: {total_solicit}")
+        logger.info(f"  ADVERTISE Received: {total_advertise}")
+        logger.info(f"  REQUEST Sent: {total_request}")
+        logger.info(f"  REPLY Received: {total_reply}")
+        logger.info(f"  Success Rate: {success_rate:.1f}%")
+        if avg_sarr_time > 0:
+            logger.info(f"  Average SARR Time: {avg_sarr_time:.2f}s")
+
+        logger.info(f"\nRenewal Statistics:")
+        logger.info(f"  RENEW Sent: {total_renew}")
+        logger.info(f"  REBIND Sent: {total_rebind}")
+
+        logger.info(f"\nRetransmission Statistics:")
+        logger.info(f"  Total Retransmissions: {total_retrans}")
+
+        logger.info(f"\nAssignment Statistics:")
+        logger.info(f"  Total Addresses Assigned: {total_addresses}")
+        logger.info(f"  Total Prefixes Assigned: {total_prefixes}")
 
         logger.info("\nClient Details:")
         for client in self.clients:
@@ -217,8 +302,8 @@ async def main():
     parser.add_argument(
         '--monitor-interval',
         type=int,
-        default=10,
-        help='상태 모니터링 간격 (초, 기본값: 10)'
+        default=5,
+        help='상태 모니터링 간격 (초, 기본값: 5)'
     )
 
     parser.add_argument(
