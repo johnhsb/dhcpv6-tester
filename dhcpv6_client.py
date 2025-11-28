@@ -677,8 +677,10 @@ class DHCPv6Client:
             sendp(pkt_l2, iface=self.interface, verbose=False)
 
             # 다음 재전송 스케줄 (무제한)
-            self.retransmit_timer = threading.Timer(rt, self._retransmit_solicit)
-            self.retransmit_timer.start()
+            # stop() 호출 시 즉시 중단하도록 self.running 체크
+            if self.running:
+                self.retransmit_timer = threading.Timer(rt, self._retransmit_solicit)
+                self.retransmit_timer.start()
 
         except Exception as e:
             self.logger.error(f"Failed to retransmit SOLICIT: {e}")
@@ -748,8 +750,10 @@ class DHCPv6Client:
             sendp(pkt_l2, iface=self.interface, verbose=False)
 
             # 다음 재전송 스케줄
-            self.retransmit_timer = threading.Timer(rt, self._retransmit_request)
-            self.retransmit_timer.start()
+            # stop() 호출 시 즉시 중단하도록 self.running 체크
+            if self.running:
+                self.retransmit_timer = threading.Timer(rt, self._retransmit_request)
+                self.retransmit_timer.start()
 
         except Exception as e:
             self.logger.error(f"Failed to retransmit REQUEST: {e}")
