@@ -2,6 +2,7 @@
 
 import struct
 import random
+import secrets
 import uuid
 from scapy.all import *
 from scapy.layers.inet6 import IPv6, UDP
@@ -57,12 +58,24 @@ class DHCPv6Packet:
         self.iaid = random.randint(0, 0xFFFFFFFF)
 
     def _generate_random_mac(self):
-        """랜덤 MAC 주소 생성"""
-        mac = [0x00, 0x16, 0x3e,
-               random.randint(0x00, 0x7f),
-               random.randint(0x00, 0xff),
-               random.randint(0x00, 0xff)]
-        return ':'.join(map(lambda x: "%02x" % x, mac))
+        """
+        암호학적으로 안전한 랜덤 MAC 주소 생성
+
+        - secrets 모듈을 사용하여 6바이트 완전 랜덤 생성
+        - Locally Administered Unicast MAC 주소로 설정
+          * Bit 0 (I/G): 0 = Unicast
+          * Bit 1 (U/L): 1 = Locally Administered
+        - 중복 가능성 최소화: 2^46 = 70조 개 이상의 고유 조합
+        """
+        # 6바이트 랜덤 생성 (cryptographically secure)
+        mac_bytes = bytearray(secrets.token_bytes(6))
+
+        # 첫 번째 바이트를 Locally Administered Unicast로 설정
+        # Bit 0 = 0 (Unicast), Bit 1 = 1 (Locally Administered)
+        # 0xXY -> (XY & 0xFC) | 0x02 = 로컬 관리 유니캐스트
+        mac_bytes[0] = (mac_bytes[0] & 0xFC) | 0x02
+
+        return ':'.join('%02x' % b for b in mac_bytes)
 
     def _generate_duid(self):
         """DUID-LLT (Link-layer address plus time) 생성"""
