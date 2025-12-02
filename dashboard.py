@@ -9,7 +9,7 @@ from rich.layout import Layout
 from rich.panel import Panel
 from rich.text import Text
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
-from dhcpv6_client import DHCPv6Client
+from dhcpv6_client import DHCPv6Client, is_shutdown_requested
 
 
 class DHCPv6Dashboard:
@@ -271,7 +271,7 @@ class DashboardRunner:
             refresh_per_second=1.0 / self.update_interval,
             vertical_overflow="visible"
         ) as live:
-            while self.running:
+            while self.running and not is_shutdown_requested():
                 try:
                     live.update(self.dashboard.generate_layout())
                     time.sleep(self.update_interval)

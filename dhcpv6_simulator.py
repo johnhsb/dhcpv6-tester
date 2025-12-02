@@ -9,7 +9,7 @@ import logging
 import asyncio
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from dhcpv6_client import DHCPv6Client
+from dhcpv6_client import DHCPv6Client, set_global_shutdown
 from dashboard import DHCPv6Dashboard, DashboardRunner
 
 # 로깅 설정
@@ -389,6 +389,7 @@ async def main():
     # 시그널 핸들러 설정
     def signal_handler(sig, frame):
         logger.info("\nReceived interrupt signal, stopping...")
+        set_global_shutdown()  # 전역 종료 이벤트 설정 (모든 클라이언트 즉시 중단)
         simulator.running = False  # 클라이언트 생성 즉시 중단
         stop_event.set()  # 이벤트를 set하여 즉시 깨우기
 

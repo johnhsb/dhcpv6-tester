@@ -11,6 +11,20 @@ from scapy.layers.dhcp6 import DHCP6_Advertise, DHCP6_Reply, DHCP6_RelayReply
 from scapy.layers.l2 import Ether
 from dhcpv6_packet import DHCPv6Packet, DHCPV6_CLIENT_PORT, DHCPV6_SERVER_PORT
 
+# 전역 종료 이벤트 (Ctrl-C 시그널 즉시 전파용)
+_shutdown_event = threading.Event()
+
+
+def set_global_shutdown():
+    """전역 종료 이벤트 설정 (시그널 핸들러에서 호출)"""
+    _shutdown_event.set()
+
+
+def is_shutdown_requested():
+    """전역 종료 이벤트 확인"""
+    return _shutdown_event.is_set()
+
+
 # 로깅 설정
 logging.basicConfig(
     level=logging.INFO,
@@ -258,6 +272,11 @@ class DHCPv6Client:
 
     def _send_renew(self):
         """RENEW 메시지 전송"""
+        # 전역 종료 이벤트 체크 (타이머 콜백 시작 즉시)
+        if _shutdown_event.is_set() or not self.running:
+            self.logger.debug("RENEW aborted due to shutdown")
+            return
+
         mode = "via Relay" if self.relay_server else "multicast"
         self.logger.info(f"Sending RENEW message ({mode})")
         self.state = self.STATE_RENEW
@@ -299,6 +318,11 @@ class DHCPv6Client:
 
     def _send_rebind(self):
         """REBIND 메시지 전송"""
+        # 전역 종료 이벤트 체크 (타이머 콜백 시작 즉시)
+        if _shutdown_event.is_set() or not self.running:
+            self.logger.debug("REBIND aborted due to shutdown")
+            return
+
         self.logger.info("Sending REBIND message")
         self.state = self.STATE_REBIND
 
@@ -326,7 +350,8 @@ class DHCPv6Client:
     def _recv_packets(self):
         """DHCPv6 패킷 수신 스레드"""
         def packet_handler(pkt):
-            if not self.running:
+            # 전역 종료 이벤트 체크 (Ctrl-C 즉시 반응)
+            if _shutdown_event.is_set() or not self.running:
                 return
 
             # Python 레벨 필터링 (libpcap BPF 컴파일 우회)
@@ -342,15 +367,15 @@ class DHCPv6Client:
 
         self.logger.debug(f"Starting packet capture (DHCPv6 client port {DHCPV6_CLIENT_PORT})")
 
-        # timeout을 사용하여 주기적으로 self.running 확인
-        while self.running:
+        # timeout을 사용하여 주기적으로 self.running 및 shutdown_event 확인
+        while self.running and not _shutdown_event.is_set():
             sniff(
                 iface=self.interface,
                 filter=None,  # BPF 필터 제거 (Python 레벨에서 필터링)
                 prn=packet_handler,
                 store=False,
-                timeout=1,  # 1초마다 타임아웃하여 self.running 확인
-                stop_filter=lambda x: not self.running
+                timeout=0.1,  # 100ms마다 타임아웃하여 즉시 종료 가능하도록 단축
+                stop_filter=lambda x: not self.running or _shutdown_event.is_set()
             )
 
     def _handle_packet(self, pkt):
@@ -643,6 +668,11 @@ class DHCPv6Client:
 
     def _retransmit_solicit(self):
         """SOLICIT 재전송 (RFC 8415)"""
+        # 전역 종료 이벤트 체크 (타이머 콜백 시작 즉시)
+        if _shutdown_event.is_set():
+            self.logger.debug("SOLICIT retransmission aborted due to shutdown")
+            return
+
         if not self.running or self.state != self.STATE_SOLICIT:
             return
 
@@ -677,8 +707,8 @@ class DHCPv6Client:
             sendp(pkt_l2, iface=self.interface, verbose=False)
 
             # 다음 재전송 스케줄 (무제한)
-            # stop() 호출 시 즉시 중단하도록 self.running 체크
-            if self.running:
+            # stop() 호출 시 즉시 중단하도록 self.running 및 shutdown_event 체크
+            if self.running and not _shutdown_event.is_set():
                 self.retransmit_timer = threading.Timer(rt, self._retransmit_solicit)
                 self.retransmit_timer.start()
 
@@ -687,6 +717,11 @@ class DHCPv6Client:
 
     def _retransmit_request(self):
         """REQUEST 재전송 (RFC 8415)"""
+        # 전역 종료 이벤트 체크 (타이머 콜백 시작 즉시)
+        if _shutdown_event.is_set():
+            self.logger.debug("REQUEST retransmission aborted due to shutdown")
+            return
+
         if not self.running or self.state != self.STATE_REQUEST:
             return
 
@@ -750,8 +785,8 @@ class DHCPv6Client:
             sendp(pkt_l2, iface=self.interface, verbose=False)
 
             # 다음 재전송 스케줄
-            # stop() 호출 시 즉시 중단하도록 self.running 체크
-            if self.running:
+            # stop() 호출 시 즉시 중단하도록 self.running 및 shutdown_event 체크
+            if self.running and not _shutdown_event.is_set():
                 self.retransmit_timer = threading.Timer(rt, self._retransmit_request)
                 self.retransmit_timer.start()
 
